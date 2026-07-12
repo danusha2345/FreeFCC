@@ -231,3 +231,11 @@ Sign the output APK with your own keystore or the debug one.
 AGPL-3.0. See [LICENSE](LICENSE).
 
 The DUMPL protocol implementation is based on the publicly documented [dji-firmware-tools](https://github.com/o-gs/dji-firmware-tools) project (GPL-3.0).
+
+## Contact
+
+Questions, issues, or feedback? Reach out:
+
+- **Email:** [freefccidothings@gmail.com](mailto:freefccidothings@gmail.com)
+- **GitHub Issues:** [github.com/doesthings/FreeFCC/issues](https://github.com/doesthings/FreeFCC/issues)
+- **Ko-fi:** [ko-fi.com/freefcc](https://ko-fi.com/freefcc)
