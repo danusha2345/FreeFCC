@@ -1,5 +1,7 @@
 package com.freefcc.app
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -90,7 +92,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun AppRoot(viewModel: FccViewModel) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    val pagerState = rememberPagerState(initialPage = 0) { 3 }
+    val pagerState = rememberPagerState(initialPage = 0) { 4 }
     val scope = rememberCoroutineScope()
 
     // Entrance fade
@@ -137,6 +139,7 @@ private fun AppRoot(viewModel: FccViewModel) {
                 0 -> FccPage(state, viewModel)
                 1 -> InfoPage(state, viewModel)
                 2 -> LogPage(state)
+                3 -> SupportPage()
             }
         }
 
@@ -385,6 +388,106 @@ private fun LogPage(state: AppState) {
                     }
                 }
             }
+        }
+
+        Spacer(Modifier.height(80.dp))
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Page 4: Support
+// ═══════════════════════════════════════════════════════════════════════
+
+@Composable
+private fun SupportPage() {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 22.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Spacer(Modifier.height(52.dp))
+        PageTitle("Support FreeFCC", Icons.Outlined.FavoriteBorder)
+        Spacer(Modifier.height(24.dp))
+
+        // Heart icon with pulse
+        val heartPulse = rememberInfiniteTransition(label = "heart")
+        val heartScale by heartPulse.animateFloat(
+            1f, 1.15f,
+            infiniteRepeatable(tween(1000, easing = EaseInOutSine), RepeatMode.Reverse),
+            label = "heartScale"
+        )
+
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.size(100.dp)) {
+            Box(
+                Modifier
+                    .size(80.dp)
+                    .background(
+                        Brush.radialGradient(
+                            listOf(Red.copy(0.08f), Color.Transparent),
+                            radius = 80f
+                        )
+                    )
+            )
+            Icon(
+                Icons.Filled.Favorite,
+                null,
+                tint = Red.copy(0.7f),
+                modifier = Modifier.size(48.dp).scale(heartScale)
+            )
+        }
+
+        Spacer(Modifier.height(16.dp))
+        StatusText("FreeFCC is free and open source.", TextWhite)
+        Spacer(Modifier.height(4.dp))
+        StatusText("If it helped you, consider supporting development.", TextGray)
+        Spacer(Modifier.height(24.dp))
+
+        // Ko-fi button
+        GlowButton(
+            "Support on Ko-fi",
+            Cyan,
+            filled = true
+        ) {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://ko-fi.com/freefcc"))
+            context.startActivity(intent)
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        // Link text
+        Text(
+            "ko-fi.com/freefcc",
+            color = Cyan.copy(0.6f),
+            fontSize = 13.sp,
+            fontFamily = FontFamily.Monospace,
+            modifier = Modifier.clickable {
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://ko-fi.com/freefcc"))
+                context.startActivity(intent)
+            }
+        )
+
+        Spacer(Modifier.height(32.dp))
+
+        // About card
+        GlowCard {
+            Text("About", color = TextWhite, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(10.dp))
+            StatusText("FreeFCC is an open-source tool for unlocking FCC mode on DJI controllers. It uses the publicly documented DUMPL protocol and requires no server, license, or internet connection.", TextGray)
+            Spacer(Modifier.height(12.dp))
+            DividerLine()
+            Spacer(Modifier.height(12.dp))
+            InfoRow("Version", "1.0")
+            Spacer(Modifier.height(6.dp))
+            InfoRow("License", "Open Source")
+            Spacer(Modifier.height(6.dp))
+            InfoRow("Protocol", "DUMPL (0x55)")
+            Spacer(Modifier.height(12.dp))
+            DividerLine()
+            Spacer(Modifier.height(12.dp))
+            StatusText("Not affiliated with DJI. Use at your own risk.", TextDim)
         }
 
         Spacer(Modifier.height(80.dp))
@@ -794,7 +897,8 @@ private fun BottomNavBar(
     val tabs = listOf(
         Triple("FCC", Icons.Filled.Wifi, Cyan),
         Triple("Info", Icons.Filled.Info, Green),
-        Triple("Log", Icons.Filled.History, Amber)
+        Triple("Log", Icons.Filled.History, Amber),
+        Triple("Support", Icons.Filled.Favorite, Red)
     )
 
     Surface(

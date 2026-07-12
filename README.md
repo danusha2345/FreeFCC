@@ -188,6 +188,14 @@ $apksigner = "C:\Android\Sdk\build-tools\35.0.1\apksigner.bat"
 6. For 4G: tap **Turn 4G ON** (requires aircraft connected for serial)
 7. To stop: tap **Stop FCC Mode** to restore CE
 8. **Info tab**: tap refresh to query the controller's hardware/firmware version
+9. **Support tab**: if the app helped you, consider supporting development
+
+## Support This Project
+
+FreeFCC is free and open source. If it helped you, consider supporting
+development:
+
+**[Ko-fi →](https://ko-fi.com/freefcc)**
 
 ## No Internet, No Server, No Tracking
 
