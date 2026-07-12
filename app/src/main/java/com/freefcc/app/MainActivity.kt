@@ -948,7 +948,6 @@ private fun GlowButton(
     color: Color,
     filled: Boolean = true,
     enabled: Boolean = true,
-    fillWidth: Boolean = true,
     onClick: () -> Unit
 ) {
     Button(
@@ -967,8 +966,8 @@ private fun GlowButton(
             else -> null
         },
         modifier = Modifier
-            .then(if (fillWidth) Modifier.fillMaxWidth() else Modifier)
-            .height(48.dp)
+            .fillMaxWidth()
+            .height(52.dp)
     ) {
         Text(text, fontWeight = FontWeight.Bold, fontSize = 15.sp, letterSpacing = 0.5.sp)
     }

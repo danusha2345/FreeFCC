@@ -292,12 +292,14 @@ class DumplTransport {
             socket = Socket()
             socket.connect(InetSocketAddress(HOST, port), 2000)
             socket.tcpNoDelay = true
-            socket.soTimeout = readWindowMs
+            socket.soTimeout = maxOf(readWindowMs, 200)
 
             socket.getOutputStream().apply { write(frame); flush() }
 
-            // Read and discard the ACK
+            // Wait for the ACK so the controller has time to process
             try { socket.getInputStream().read(ByteArray(2048)) } catch (_: IOException) {}
+            // Small settle delay to ensure the controller finished processing
+            Thread.sleep(20)
             return true
         } catch (_: IOException) { return false }
         finally { try { socket?.close() } catch (_: IOException) {} }

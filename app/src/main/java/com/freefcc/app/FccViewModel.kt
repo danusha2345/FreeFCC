@@ -211,7 +211,8 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                 rounds = profile.rounds,
                 interFrameDelayMs = profile.interFrameDelay,
                 interRoundDelayMs = profile.interRoundDelay,
-                readWindowMs = profile.readWindowMs
+                readWindowMs = profile.readWindowMs,
+                port = profile.port
             ) { progress -> update { copy(busyProgress = progress) } }
 
             if (success) {
