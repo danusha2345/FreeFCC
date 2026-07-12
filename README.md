@@ -83,7 +83,7 @@ If the signal graph hasn't changed, power cycle the controller and try again. Ma
 
 FreeFCC is free and open source under AGPL-3.0. If it saved you some money or just made your day better, consider buying me a coffee:
 
-[![Ko-fi](https://ko-fi.com/img/githubbutton_64.png)](https://ko-fi.com/freefcc)
+[![Support on Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20this%20project-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/freefcc)
 
 Every contribution helps cover server costs and keeps development going. Thank you.
 
