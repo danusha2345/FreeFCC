@@ -264,6 +264,68 @@ private fun FccPage(state: AppState, viewModel: FccViewModel) {
             }
         }
 
+        // LED control card
+        Spacer(Modifier.height(16.dp))
+        GlowCard {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("External LED", color = TextWhite, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "Turn aircraft arm LEDs on or off. Requires DJI Fly running with aircraft connected.",
+                        color = TextGray,
+                        fontSize = 12.sp,
+                        lineHeight = 17.sp
+                    )
+                    if (state.ledStatus.isNotEmpty()) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "Status: ${state.ledStatus}",
+                            color = if (state.ledStatus == "ON") Green else if (state.ledStatus == "OFF") TextGray else Amber,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button(
+                    onClick = { viewModel.setLed(true) },
+                    enabled = state.isConnected && !state.isLedBusy,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Green,
+                        contentColor = BgDark,
+                        disabledContainerColor = Green.copy(0.2f),
+                        disabledContentColor = Green.copy(0.4f)
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, Green.copy(0.3f)),
+                    modifier = Modifier.weight(1f).height(48.dp)
+                ) {
+                    Text("LED ON", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                }
+                Button(
+                    onClick = { viewModel.setLed(false) },
+                    enabled = state.isConnected && !state.isLedBusy,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color.Transparent,
+                        contentColor = TextGray,
+                        disabledContainerColor = TextGray.copy(0.1f),
+                        disabledContentColor = TextGray.copy(0.3f)
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.5.dp, TextGray.copy(0.5f)),
+                    modifier = Modifier.weight(1f).height(48.dp)
+                ) {
+                    Text("LED OFF", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                }
+            }
+        }
+
         // Auto-FCC toggle card
         Spacer(Modifier.height(16.dp))
         GlowCard {
@@ -886,6 +948,7 @@ private fun GlowButton(
     color: Color,
     filled: Boolean = true,
     enabled: Boolean = true,
+    fillWidth: Boolean = true,
     onClick: () -> Unit
 ) {
     Button(
@@ -904,8 +967,8 @@ private fun GlowButton(
             else -> null
         },
         modifier = Modifier
-            .fillMaxWidth()
-            .height(52.dp)
+            .then(if (fillWidth) Modifier.fillMaxWidth() else Modifier)
+            .height(48.dp)
     ) {
         Text(text, fontWeight = FontWeight.Bold, fontSize = 15.sp, letterSpacing = 0.5.sp)
     }

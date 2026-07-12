@@ -36,6 +36,8 @@ data class AppState(
     val deviceInfo: String = "",
     val isQueryingInfo: Boolean = false,
     val autoFcc: Boolean = false,
+    val isLedBusy: Boolean = false,
+    val ledStatus: String = "",
     val logMessages: List<String> = emptyList()
 )
 
@@ -324,6 +326,43 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                 )
             }
             log("4G disabled")
+        }
+    }
+
+    // --- LED ---
+
+    /**
+     * Turns the aircraft arm LEDs on or off.
+     * Uses port 40007 (different from the standard 40009 DUMPL port).
+     * Requires DJI Fly running with the aircraft connected.
+     *
+     * @param on true for LED ON, false for LED OFF
+     */
+    fun setLed(on: Boolean) {
+        update { copy(isLedBusy = true, ledStatus = if (on) "Turning LEDs on..." else "Turning LEDs off...") }
+        log(if (on) "Turning LEDs on..." else "Turning LEDs off...")
+
+        runOnIO {
+            val fileName = if (on) "led_on.json" else "led_off.json"
+            val profile = Profiles.load(app, fileName)
+            log("Loaded LED profile: ${profile.frames.size} frames (port ${profile.port})")
+
+            val success = transport.sendFrames(
+                frames = profile.frames,
+                rounds = profile.rounds,
+                interFrameDelayMs = profile.interFrameDelay,
+                interRoundDelayMs = profile.interRoundDelay,
+                readWindowMs = profile.readWindowMs,
+                port = profile.port
+            )
+
+            if (success) {
+                update { copy(isLedBusy = false, ledStatus = if (on) "ON" else "OFF") }
+                log(if (on) "LEDs turned on" else "LEDs turned off")
+            } else {
+                update { copy(isLedBusy = false, ledStatus = "Failed — is DJI Fly running?") }
+                log("LED command failed — make sure DJI Fly is running with aircraft connected")
+            }
         }
     }
 

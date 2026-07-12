@@ -169,6 +169,7 @@ class DumplTransport {
         interFrameDelayMs: Long = 150,
         interRoundDelayMs: Long = 0,
         readWindowMs: Int = 80,
+        port: Int = PORT,
         onProgress: (Float) -> Unit = {}
     ): Boolean {
         var anySuccess = false
@@ -177,7 +178,7 @@ class DumplTransport {
 
         for (round in 0 until rounds) {
             for (frame in frames) {
-                if (sendOneFrame(frame, readWindowMs)) {
+                if (sendOneFrame(frame, readWindowMs, port)) {
                     anySuccess = true
                 }
                 sent++
@@ -200,11 +201,11 @@ class DumplTransport {
      *
      * @return response payload, or null if no response was received
      */
-    fun sendAndReceive(frame: ByteArray, readWindowMs: Int = 500): ByteArray? {
+    fun sendAndReceive(frame: ByteArray, readWindowMs: Int = 500, port: Int = PORT): ByteArray? {
         var socket: Socket? = null
         try {
             socket = Socket()
-            socket.connect(InetSocketAddress(HOST, PORT), 2000)
+            socket.connect(InetSocketAddress(HOST, port), 2000)
             socket.tcpNoDelay = true
             socket.soTimeout = readWindowMs
 
@@ -273,11 +274,11 @@ class DumplTransport {
     }
 
     /** Checks if the DUMPL proxy is reachable (controller is powered on). */
-    fun isReachable(): Boolean {
+    fun isReachable(port: Int = PORT): Boolean {
         var socket: Socket? = null
         return try {
             socket = Socket()
-            socket.connect(InetSocketAddress(HOST, PORT), 2000)
+            socket.connect(InetSocketAddress(HOST, port), 2000)
             true
         } catch (_: IOException) { false }
         finally { try { socket?.close() } catch (_: IOException) {} }
@@ -285,11 +286,11 @@ class DumplTransport {
 
     // --- Internal helpers ---
 
-    private fun sendOneFrame(frame: ByteArray, readWindowMs: Int): Boolean {
+    private fun sendOneFrame(frame: ByteArray, readWindowMs: Int, port: Int = PORT): Boolean {
         var socket: Socket? = null
         try {
             socket = Socket()
-            socket.connect(InetSocketAddress(HOST, PORT), 2000)
+            socket.connect(InetSocketAddress(HOST, port), 2000)
             socket.tcpNoDelay = true
             socket.soTimeout = readWindowMs
 
@@ -315,6 +316,7 @@ class DumplTransport {
 
     companion object {
         private const val HOST = "127.0.0.1"
-        private const val PORT = 40009
+        const val PORT = 40009       // Standard DUMPL proxy port (FCC, 4G, RID)
+        const val PORT_LED = 40007   // LED control port (different from standard)
     }
 }

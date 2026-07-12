@@ -32,9 +32,12 @@ A free and open-source Android app that unlocks FCC mode, enables 4G transmissio
 |---------|-------------|
 | **FCC Unlock** | Switches the radio from CE to FCC mode for higher power and more channels |
 | **4G Activation** | Enables 4G transmission on the aircraft (serial read at runtime) |
+| **LED Control** | Turn aircraft arm LEDs on or off (requires DJI Fly running with aircraft connected) |
 | **Device Info** | Queries the controller for hardware and firmware version |
+| **Auto-FCC** | Toggle to automatically connect and apply FCC every time the app opens |
 | **Offline** | Everything runs locally. No internet, no server, no tracking |
 | **Open Profiles** | Command frames are plain JSON files you can inspect and edit |
+| **No License** | No activation, no trial, no tracking, no server contact |
 
 ## Download
 
@@ -108,7 +111,8 @@ Swipe from the right edge to open ATV Launcher. Open the Files app, find your fo
 4. For 4G: tap **Turn 4G ON** (the drone needs to be connected so the app can read its serial number)
    > **Note:** 4G activation has not been tested on hardware yet. The frame format is based on the documented DUMPL protocol, but I have not confirmed it works in practice. If you try it, please [open an issue](https://github.com/doesthings/FreeFCC/issues) with the result.
 5. To stop: tap **Stop FCC Mode** to restore CE
-6. The **Info** tab lets you query the controller's hardware and firmware version
+6. For LED: tap **LED ON** or **LED OFF** (requires DJI Fly running with aircraft connected)
+7. The **Info** tab lets you query the controller's hardware and firmware version
 
 ## How Do I Know If It Worked?
 
@@ -201,6 +205,8 @@ app/src/main/
     ce_restore.json    1 frame, reset to factory region
     4g.json           128 frames, 4G activation
     device_info.json   1 frame, version inquiry
+    led_on.json        1 frame, LED on (port 40007)
+    led_off.json       1 frame, LED off (port 40007)
   java/com/freefcc/app/
     DumplTransport.kt  Frame builder (CRC-8/16) + TCP socket I/O
     Profiles.kt        JSON profile loader

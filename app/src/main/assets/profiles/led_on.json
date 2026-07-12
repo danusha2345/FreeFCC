@@ -1,0 +1,16 @@
+{
+  "name": "LED On",
+  "description": "Turns on the aircraft arm LEDs. Requires DJI Fly running with aircraft connected. Uses port 40007.",
+  "sender": 2,
+  "sender_desc": "CAMERA, index 0",
+  "cmd_type": 3,
+  "cmd_type_desc": "Request, ACK_BEFORE_EXEC, no encryption",
+  "rounds": 2,
+  "inter_frame_delay_ms": 100,
+  "inter_round_delay_ms": 100,
+  "read_window_ms": 100,
+  "port": 40007,
+  "frames": [
+    { "s": 3, "i": 249, "d": 64, "p": "a259ceedef", "note": "FLYCONTROLLER write param: LED ON" }
+  ]
+}

@@ -33,6 +33,7 @@ object Profiles {
         val interRoundDelay: Long,
         val readWindowMs: Int,
         val needsResponse: Boolean,
+        val port: Int,
         val frames: List<ByteArray>
     )
 
@@ -48,6 +49,7 @@ object Profiles {
         val interRound = obj.optLong("inter_round_delay_ms", 0)
         val readWindow = obj.optInt("read_window_ms", 80)
         val needsResponse = obj.optBoolean("needs_response", false)
+        val port = obj.optInt("port", 40009)
 
         val framesArray = obj.getJSONArray("frames")
         val builder = DumplBuilder()
@@ -63,7 +65,7 @@ object Profiles {
             ))
         }
 
-        return Profile(sender, cmdType, rounds, interFrame, interRound, readWindow, needsResponse, frames)
+        return Profile(sender, cmdType, rounds, interFrame, interRound, readWindow, needsResponse, port, frames)
     }
 
     /**
@@ -106,7 +108,7 @@ object Profiles {
             ))
         }
 
-        return Profile(sender, cmdType, rounds, interFrame, interRound, readWindow, false, frames)
+        return Profile(sender, cmdType, rounds, interFrame, interRound, readWindow, false, 40009, frames)
     }
 
     // --- Helpers ---
