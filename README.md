@@ -50,7 +50,7 @@ You need both. The helper apps let you sideload FreeFCC onto the RC2.
 
 ## Compatibility
 
-**Only tested on the DJI RC2 controller.** For RC Pro or RC Plus controllers, use [freefcc-launcher](https://github.com/doesthings/freefcc-launcher) instead. FreeFCC uses the RC2's DUMPL proxy which may not be available on other controllers without the launcher.
+**Only tested on the DJI RC2 controller.** For DJI RC Pro 2 or RC Plus controllers, use [freefcc-launcher](https://github.com/doesthings/freefcc-launcher) instead. FreeFCC uses the RC2's DUMPL proxy which may not be available on other controllers without the launcher.
 
 | Drone | Controller | FCC | 4G | LED | Status |
 |-------|-----------|-----|-----|-----|--------|
@@ -59,7 +59,7 @@ You need both. The helper apps let you sideload FreeFCC onto the RC2.
 | DJI Neo 2 | RC2 | Yes | Not tested | Not tested | FCC working |
 | DJI Avata 360 | RC2 | Yes | Not tested | Not tested | FCC working |
 | Other RC2 aircraft | RC2 | Should work | Unknown | Unknown | FCC profile is universal |
-| RC Pro / RC Plus | All | Use [freefcc-launcher](https://github.com/doesthings/freefcc-launcher) | - | - | Not tested with this app |
+| DJI RC Pro 2 / RC Plus | All | Use [freefcc-launcher](https://github.com/doesthings/freefcc-launcher) | - | - | Not tested with this app |
 
 Tested on DJI RC 2 Remote Controller firmware v10.00.0700. Older firmware versions should also work, and future versions will likely continue to work unless DJI patches the DUMPL param write path.
 
