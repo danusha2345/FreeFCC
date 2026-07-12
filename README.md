@@ -1,5 +1,15 @@
 # FreeFCC
 
+> **Disclaimer**
+>
+> This software is provided for educational and research purposes only. Modifying radio transmission parameters may violate laws and regulations in your country or region. In most places, increasing radio power beyond what is legally permitted for your area requires authorization from the relevant regulatory authority.
+>
+> You are solely responsible for ensuring that your use of this software complies with all applicable local, regional, and national laws. The authors of this project accept no liability for any damage, legal consequences, or regulatory action arising from the use of this tool.
+>
+> Use only if you have proper authorization to operate in FCC mode in your jurisdiction. If you are unsure whether this is legal where you live, do not use it.
+>
+> This project is not affiliated with, endorsed by, or sponsored by DJI. Using this tool may void your warranty and DJI Care Refresh coverage.
+
 Free and open source FCC unlock for DJI controllers. Works on RC2, RC Pro, and RC Plus. No server, no license, no tracking. Just raw DUMPL commands sent from JSON profile files.
 
 The app does three things:
@@ -154,7 +164,3 @@ Sign the output APK with your own keystore or the debug one.
 AGPL-3.0. See [LICENSE](LICENSE).
 
 The DUMPL protocol implementation is based on the publicly documented [dji-firmware-tools](https://github.com/o-gs/dji-firmware-tools) project (GPL-3.0).
-
-## Disclaimer
-
-Not affiliated with DJI. Modifying radio parameters may violate regulations in your country. Use at your own risk.
