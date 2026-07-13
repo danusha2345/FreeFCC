@@ -44,6 +44,7 @@ data class AppState(
     val isCheckingUpdate: Boolean = false,
     val isDownloadingUpdate: Boolean = false,
     val updateDownloadProgress: Float = 0f,
+    val isUpdateDownloaded: Boolean = false,
     val updateAvailable: Boolean = false,
     val updateChecked: Boolean = false
 )
@@ -473,9 +474,11 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun downloadAndInstallUpdate() {
+    private var downloadedApk: java.io.File? = null
+
+    fun downloadUpdate() {
         val info = _state.value.updateInfo ?: return
-        update { copy(isDownloadingUpdate = true, updateDownloadProgress = 0f) }
+        update { copy(isDownloadingUpdate = true, updateDownloadProgress = 0f, isUpdateDownloaded = false) }
         log("Downloading update v${info.version}...")
 
         runOnIO {
@@ -489,9 +492,15 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                 return@runOnIO
             }
 
-            log("Update downloaded — launching installer...")
-            update { copy(isDownloadingUpdate = false, updateDownloadProgress = 1f) }
+            downloadedApk = file
+            update { copy(isDownloadingUpdate = false, updateDownloadProgress = 1f, isUpdateDownloaded = true) }
+            log("Update downloaded — tap Install to apply")
+        }
+    }
 
+    fun installUpdate() {
+        val file = downloadedApk ?: return
+        try {
             val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
                 setDataAndType(
                     androidx.core.content.FileProvider.getUriForFile(
@@ -505,6 +514,9 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                 addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
             app.startActivity(intent)
+            log("Launching installer...")
+        } catch (e: Exception) {
+            log("Install failed: ${e.message}")
         }
     }
 

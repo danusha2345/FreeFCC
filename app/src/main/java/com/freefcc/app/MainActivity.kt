@@ -644,14 +644,26 @@ private fun UpdatePage(state: AppState, viewModel: FccViewModel) {
 
             if (state.updateAvailable) {
                 Spacer(Modifier.height(24.dp))
-                if (state.isDownloadingUpdate) {
-                    ProgressDisplay(
-                        state.updateDownloadProgress,
-                        "Downloading update... (${(state.updateDownloadProgress * 100).toInt()}%)"
-                    )
-                } else {
-                    GlowButton("Download & Install", Green) {
-                        viewModel.downloadAndInstallUpdate()
+                when {
+                    state.isDownloadingUpdate -> {
+                        ProgressDisplay(
+                            state.updateDownloadProgress,
+                            "Downloading... (${(state.updateDownloadProgress * 100).toInt()}%)"
+                        )
+                    }
+                    state.isUpdateDownloaded -> {
+                        GlowButton("Install Update", Green) {
+                            viewModel.installUpdate()
+                        }
+                        Spacer(Modifier.height(12.dp))
+                        GlowButton("Download Again", Cyan, filled = false) {
+                            viewModel.downloadUpdate()
+                        }
+                    }
+                    else -> {
+                        GlowButton("Download", Green) {
+                            viewModel.downloadUpdate()
+                        }
                     }
                 }
             }
