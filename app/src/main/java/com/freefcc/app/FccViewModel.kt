@@ -672,53 +672,46 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                 app, "${app.packageName}.fileprovider", file
             )
 
-            // Build the install intent
-            val installIntent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+            // 1. Try the RC2's installed PackageInstaller directly
+            val pkgInstallerIntent = android.content.Intent().apply {
+                component = android.content.ComponentName(
+                    "com.android.packageinstaller",
+                    "com.android.packageinstaller.PackageInstallerActivity"
+                )
+                action = android.content.Intent.ACTION_VIEW
                 setDataAndType(uri, "application/vnd.android.package-archive")
-                flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
+                        android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
             }
-
-            // Try launching directly
-            var launched = false
             try {
-                app.startActivity(installIntent)
-                launched = true
+                app.startActivity(pkgInstallerIntent)
                 log("Launching installer...")
-            } catch (_: android.content.ActivityNotFoundException) {
-                // No activity handles ACTION_VIEW for APK — try chooser
-            }
+                return
+            } catch (_: android.content.ActivityNotFoundException) {}
 
-            if (!launched) {
-                val chooser = android.content.Intent.createChooser(installIntent, "Install FreeFCC").apply {
-                    flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
-                }
-                try {
-                    app.startActivity(chooser)
-                    launched = true
-                    log("Launching installer via chooser...")
-                } catch (_: android.content.ActivityNotFoundException) {
-                    // No chooser either
-                }
+            // 2. Try generic ACTION_VIEW
+            val viewIntent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/vnd.android.package-archive")
+                flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
+                        android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
             }
+            try {
+                app.startActivity(viewIntent)
+                log("Launching installer...")
+                return
+            } catch (_: android.content.ActivityNotFoundException) {}
 
-            if (!launched) {
-                // Last resort: try the system package installer directly
-                val directIntent = android.content.Intent("com.android.packageinstaller.action.INSTALL_PACKAGE").apply {
-                    setDataAndType(uri, "application/vnd.android.package-archive")
-                    flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
-                }
-                try {
-                    app.startActivity(directIntent)
-                    launched = true
-                    log("Launching system package installer...")
-                } catch (_: Exception) {
-                    // Still nothing
-                }
+            // 3. Try chooser
+            val chooser = android.content.Intent.createChooser(viewIntent, "Install FreeFCC").apply {
+                flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
             }
+            try {
+                app.startActivity(chooser)
+                log("Launching installer via chooser...")
+                return
+            } catch (_: android.content.ActivityNotFoundException) {}
 
-            if (!launched) {
-                log("Could not launch installer — use a file manager to open the APK from cache")
-            }
+            log("Could not launch installer — open the APK from a file manager")
         } catch (e: Exception) {
             log("Install failed: ${e.message}")
         }
