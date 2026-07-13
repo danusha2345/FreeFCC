@@ -99,9 +99,9 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
             // Wait a moment for the UI to render
             delay(1000)
 
-            // Try to connect
+            // Try to connect — scans all known ports
             update { copy(status = "connecting", message = "Auto-connecting...") }
-            if (!transport.isReachable()) {
+            if (!transport.connect()) {
                 log("Auto-FCC: controller not found — is the drone powered on?")
                 update { copy(status = "disconnected", message = "Controller not found. Auto-FCC will retry when you tap Connect.") }
                 return@runOnIO
@@ -175,7 +175,7 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
         log("Connecting to controller...")
 
         runOnIO {
-            if (transport.isReachable()) {
+            if (transport.connect()) {
                 log("Controller connected")
                 val detectedPort = transport.getDetectedPort()
                 if (detectedPort > 0) {

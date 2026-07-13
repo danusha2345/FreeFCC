@@ -234,8 +234,9 @@ class DumplTransport {
     fun sendAndReceive(frame: ByteArray, readWindowMs: Int = 500, port: Int = PORT): ByteArray? {
         var socket: Socket? = null
         try {
+            val effectivePort = if (port == PORT) findWorkingPort() else port
             socket = Socket()
-            socket.connect(InetSocketAddress(HOST, port), 2000)
+            socket.connect(InetSocketAddress(HOST, effectivePort), 2000)
             socket.tcpNoDelay = true
             socket.soTimeout = readWindowMs
 
@@ -296,8 +297,9 @@ class DumplTransport {
     private fun listenForSerial(pattern: Regex, timeoutMs: Int): String {
         var socket: Socket? = null
         try {
+            val port = findWorkingPort()
             socket = Socket()
-            socket.connect(InetSocketAddress(HOST, PORT), 2000)
+            socket.connect(InetSocketAddress(HOST, port), 2000)
             socket.soTimeout = 200
 
             val buffer = StringBuilder()
@@ -317,6 +319,22 @@ class DumplTransport {
         } catch (_: IOException) { /* connection failed */ }
         finally { try { socket?.close() } catch (_: IOException) {} }
         return ""
+    }
+
+    /**
+     * Connects to the DUMPL proxy by scanning all known ports.
+     * Caches the working port for subsequent calls.
+     * Returns true if any port is reachable.
+     */
+    fun connect(): Boolean {
+        for (p in SCAN_PORTS) {
+            if (isReachable(p)) {
+                discoveredPort = p
+                return true
+            }
+        }
+        discoveredPort = -1
+        return false
     }
 
     /** Checks if the DUMPL proxy is reachable (controller is powered on). */
@@ -342,12 +360,14 @@ class DumplTransport {
             socket = Socket()
             socket.connect(InetSocketAddress(HOST, port), 2000)
             socket.tcpNoDelay = true
-            socket.soTimeout = maxOf(readWindowMs, 1)
+            socket.soTimeout = maxOf(readWindowMs, 200)
 
             socket.getOutputStream().apply { write(frame); flush() }
 
             // Wait for the ACK so the controller has time to process
             try { socket.getInputStream().read(ByteArray(2048)) } catch (_: IOException) {}
+            // Small settle delay to ensure the controller finished processing
+            Thread.sleep(20)
             return true
         } catch (_: IOException) { return false }
         finally { try { socket?.close() } catch (_: IOException) {} }
