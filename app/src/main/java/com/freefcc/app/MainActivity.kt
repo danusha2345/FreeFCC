@@ -826,7 +826,7 @@ private fun SupportPage() {
             Spacer(Modifier.height(16.dp))
             DividerLine()
             Spacer(Modifier.height(16.dp))
-            InfoRow("Version", "1.4.32")
+            InfoRow("Version", "1.4.33")
             Spacer(Modifier.height(12.dp))
             InfoRow("License", "AGPL-3.0")
             Spacer(Modifier.height(12.dp))
@@ -879,7 +879,7 @@ private fun AppHeader(model: String) {
         }
         Spacer(Modifier.height(6.dp))
         Text(
-            if (model.isNotEmpty()) "v1.4.32 · $model" else "v1.4.32",
+            if (model.isNotEmpty()) "v1.4.33 · $model" else "v1.4.33",
             color = TextDim,
             fontSize = 11.sp,
             fontWeight = FontWeight.Medium

@@ -66,7 +66,7 @@ data class AppState(
 class FccViewModel(private val app: Application) : AndroidViewModel(app) {
 
     companion object {
-        const val APP_VERSION = "1.4.32"
+        const val APP_VERSION = "1.4.33"
     }
 
     private val _state = MutableStateFlow(AppState())
@@ -668,69 +668,42 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
             return
         }
         try {
-            // Copy APK to a stable location the installer can read
-            val installDir = java.io.File(app.externalCacheDir, "install")
-            installDir.mkdirs()
-            val destFile = java.io.File(installDir, "freefcc_update.apk")
+            // Copy APK to external storage where the file manager can see it
+            val destDir = java.io.File(android.os.Environment.getExternalStorageDirectory(), "FreeFCC")
+            destDir.mkdirs()
+            val destFile = java.io.File(destDir, "FreeFCC_update.apk")
             file.copyTo(destFile, overwrite = true)
+            log("Update saved to SD card: ${destFile.absolutePath}")
+            log("Open your file manager and tap FreeFCC_update.apk to install")
 
-            // Method 1: Try PackageInstaller session API (works without exported activity)
+            // Also try to launch the file manager to that location
+            val fmIntent = android.content.Intent(android.content.Intent.ACTION_GET_CONTENT).apply {
+                type = "application/vnd.android.package-archive"
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
             try {
-                val packageInstaller = app.packageManager.packageInstaller
-                val params = android.content.pm.PackageInstaller.SessionParams(
-                    android.content.pm.PackageInstaller.SessionParams.MODE_FULL_INSTALL
-                )
-                val sessionId = packageInstaller.createSession(params)
-                val session = packageInstaller.openSession(sessionId)
+                app.startActivity(fmIntent)
+                log("Opening file manager...")
+            } catch (_: Exception) {
+                // File manager not available — user can find it manually
+                log("Open 02_FileManager and navigate to /storage/emulated/0/FreeFCC/")
+            }
 
-                destFile.inputStream().use { input ->
-                    session.openWrite("freefcc.apk", 0, destFile.length()).use { out ->
-                        input.copyTo(out)
-                        session.fsync(out)
-                    }
+            // Also try ACTION_VIEW with the copied file via FileProvider
+            try {
+                val uri = androidx.core.content.FileProvider.getUriForFile(
+                    app, "${app.packageName}.fileprovider", destFile
+                )
+                val viewIntent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                    setDataAndType(uri, "application/vnd.android.package-archive")
+                    flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
+                            android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
                 }
-
-                // Create a PendingIntent to receive install result
-                val intent = android.content.Intent(app, app.javaClass)
-                intent.action = "com.freefcc.app.INSTALL_RESULT"
-                val pendingIntent = android.app.PendingIntent.getActivity(
-                    app, sessionId, intent,
-                    android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
-                )
-
-                session.commit(pendingIntent.intentSender)
-                log("Launching installer (session API)...")
-                return
-            } catch (e: Exception) {
-                log("Session API failed: ${e.message}")
-            }
-
-            // Method 2: FileProvider + ACTION_VIEW
-            val uri = androidx.core.content.FileProvider.getUriForFile(
-                app, "${app.packageName}.fileprovider", destFile
-            )
-            val viewIntent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, "application/vnd.android.package-archive")
-                flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
-                        android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
-            }
-            try {
                 app.startActivity(viewIntent)
                 log("Launching installer...")
-                return
-            } catch (_: android.content.ActivityNotFoundException) {}
-
-            // Method 3: Chooser
-            val chooser = android.content.Intent.createChooser(viewIntent, "Install FreeFCC").apply {
-                flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+            } catch (_: Exception) {
+                // Fallback already handled above
             }
-            try {
-                app.startActivity(chooser)
-                log("Launching installer via chooser...")
-                return
-            } catch (_: android.content.ActivityNotFoundException) {}
-
-            log("Could not launch installer — open the APK from a file manager")
         } catch (e: Exception) {
             log("Install failed: ${e.message}")
         }

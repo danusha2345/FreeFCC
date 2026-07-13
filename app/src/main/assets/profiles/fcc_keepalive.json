@@ -1,24 +1,18 @@
 {
   "name": "FCC Keepalive",
-  "description": "Re-apply sequence sent every 2s. Matches exact keepalive used by other tools.",
+  "description": "Re-applies FCC radio mode every 2s over TCP 40009 to prevent DJI Fly from resetting to CE. Uses only TCP-confirmed-working frames.",
   "sender": 130,
   "sender_desc": "MOBILE_APP, index 4",
   "cmd_type": 32,
   "cmd_type_desc": "Request, ACK_BEFORE_EXEC, no encryption",
   "rounds": 1,
-  "inter_frame_delay_ms": 80,
+  "inter_frame_delay_ms": 100,
   "inter_round_delay_ms": 0,
   "read_window_ms": 80,
   "frames": [
-    { "s": 0,  "i": 1,   "d": 40,  "p": "", "sender": 2, "cmd_type": 64, "note": "SET trigger to 0x28" },
-    { "s": 0,  "i": 1,   "d": 72,  "p": "", "sender": 2, "cmd_type": 64, "note": "SET trigger to 0x48" },
-    { "s": 0,  "i": 1,   "d": 1,   "p": "", "sender": 2, "cmd_type": 64, "note": "SET trigger to 0x01 (FC)" },
-    { "s": 0,  "i": 1,   "d": 85,  "p": "", "sender": 2, "cmd_type": 64, "note": "SET trigger to 0x55" },
-    { "s": 0,  "i": 1,   "d": 3,   "p": "", "sender": 2, "cmd_type": 64, "note": "SET trigger to 0x03 (FC)" },
-    { "s": 6,  "i": 119, "d": 6,   "p": "010100ffff200000",   "note": "Keepalive: altitude unlock + FCC flag (dst=6)" },
-    { "s": 6,  "i": 119, "d": 20,  "p": "010100ffff200000",   "note": "Keepalive: altitude unlock + FCC flag (dst=20)" },
-    { "s": 9,  "i": 236, "d": 9,   "p": "0003",               "note": "RCLink keepalive (cmdset=9, cmdid=0xEC)" },
-    { "s": 6,  "i": 114, "d": 6,   "p": "00000000000100",     "note": "RADIO set region to FCC" },
-    { "s": 6,  "i": 114, "d": 6,   "p": "000000000001ff",     "note": "RADIO commit region change" }
+    { "s": 16, "i": 88,  "d": 18,  "p": "030100",             "note": "AUTOTEST enter service mode" },
+    { "s": 6,  "i": 114, "d": 6,   "p": "00000000000100",     "note": "RADIO set region to FCC (01)" },
+    { "s": 6,  "i": 114, "d": 6,   "p": "000000000001ff",     "note": "RADIO commit region change" },
+    { "s": 16, "i": 88,  "d": 18,  "p": "030100",             "note": "AUTOTEST exit service mode" }
   ]
 }
