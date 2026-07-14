@@ -65,7 +65,7 @@ data class AppState(
 class FccViewModel(private val app: Application) : AndroidViewModel(app) {
 
     companion object {
-        const val APP_VERSION = "1.4.5"
+        const val APP_VERSION = "1.4.6"
     }
 
     private val _state = MutableStateFlow(AppState())
@@ -92,7 +92,10 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
     fun init() {
         val model = try { Build.DEVICE } catch (_: Exception) { "unknown" }
         val autoEnabled = prefs.getBoolean("auto_fcc", false)
-        update { copy(controllerModel = model, status = "disconnected", autoFcc = autoEnabled) }
+        // Sync the keepalive toggle with the persistent flag so the UI is
+        // correct after a process restart (e.g. low-memory kill + sticky restart).
+        val keepaliveRunning = FccKeepaliveService.isRunningFlagSet(app)
+        update { copy(controllerModel = model, status = "disconnected", autoFcc = autoEnabled, isKeepaliveRunning = keepaliveRunning) }
 
         if (autoEnabled) {
             log("Auto-FCC enabled — connecting and applying...")
@@ -310,6 +313,9 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                     }
                     log("FCC apply failed — writes failed")
                 }
+            } catch (e: Exception) {
+                log("FCC apply error: ${e.message}")
+                update { copy(status = "connected", message = "FCC apply error: ${e.message}", isBusy = false, busyProgress = 0f) }
             } finally {
                 endHardwareOp()
             }
@@ -341,6 +347,9 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                     update { copy(status = "connected", message = "CE restore failed — RC link unreachable", isBusy = false) }
                     log("CE restore failed")
                 }
+            } catch (e: Exception) {
+                log("CE restore error: ${e.message}")
+                update { copy(status = "connected", message = "CE restore error: ${e.message}", isBusy = false) }
             } finally {
                 endHardwareOp()
             }
@@ -533,6 +542,9 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                     update { copy(isLedBusy = false, ledStatus = "Failed — is DJI Fly running?") }
                     log("LED command failed — make sure DJI Fly is running with aircraft connected")
                 }
+            } catch (e: Exception) {
+                log("LED error: ${e.message}")
+                update { copy(isLedBusy = false, ledStatus = "Error: ${e.message}") }
             } finally {
                 endHardwareOp()
             }
@@ -559,6 +571,11 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
         runOnIO {
             try {
                 val profile = Profiles.load(app, "device_info.json")
+                if (profile.frames.isEmpty()) {
+                    update { copy(isQueryingInfo = false, deviceInfo = "device_info.json is empty") }
+                    log("Device info: profile has no frames")
+                    return@runOnIO
+                }
                 val frame = profile.frames.first()
 
                 val response = transport.sendAndReceive(frame, profile.readWindowMs)
@@ -572,6 +589,9 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                 val info = formatVersionResponse(response)
                 update { copy(isQueryingInfo = false, deviceInfo = info) }
                 log("Device info received: ${response.size} bytes")
+            } catch (e: Exception) {
+                log("Device info error: ${e.message}")
+                update { copy(isQueryingInfo = false, deviceInfo = "Error: ${e.message}") }
             } finally {
                 endHardwareOp()
             }
@@ -665,30 +685,19 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
             update { copy(isUpdateDownloaded = false) }
             return
         }
-        try {
-            // Copy APK to external storage where the file manager can see it
-            val destDir = java.io.File(android.os.Environment.getExternalStorageDirectory(), "FreeFCC")
-            destDir.mkdirs()
-            val destFile = java.io.File(destDir, "FreeFCC_update.apk")
-            file.copyTo(destFile, overwrite = true)
-            log("Update saved to SD card: ${destFile.absolutePath}")
-            log("Open your file manager and tap FreeFCC_update.apk to install")
-
-            // Also try to launch the file manager to that location
-            val fmIntent = android.content.Intent(android.content.Intent.ACTION_GET_CONTENT).apply {
-                type = "application/vnd.android.package-archive"
-                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
+        update { copy(isBusy = true, message = "Preparing install...") }
+        runOnIO {
             try {
-                app.startActivity(fmIntent)
-                log("Opening file manager...")
-            } catch (_: Exception) {
-                // File manager not available — user can find it manually
-                log("Open 02_FileManager and navigate to /storage/emulated/0/FreeFCC/")
-            }
+                // Copy APK to external storage where the file manager can see it
+                val destDir = java.io.File(android.os.Environment.getExternalStorageDirectory(), "FreeFCC")
+                destDir.mkdirs()
+                val destFile = java.io.File(destDir, "FreeFCC_update.apk")
+                file.copyTo(destFile, overwrite = true)
+                log("Update saved to SD card: ${destFile.absolutePath}")
 
-            // Also try ACTION_VIEW with the copied file via FileProvider
-            try {
+                // Launch the system installer via FileProvider ACTION_VIEW.
+                // Previously this also fired ACTION_GET_CONTENT (file manager) which
+                // competed with the installer for focus on DJI's custom launcher.
                 val uri = androidx.core.content.FileProvider.getUriForFile(
                     app, "${app.packageName}.fileprovider", destFile
                 )
@@ -697,13 +706,18 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                     flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
                             android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
                 }
-                app.startActivity(viewIntent)
-                log("Launching installer...")
-            } catch (_: Exception) {
-                // Fallback already handled above
+                try {
+                    app.startActivity(viewIntent)
+                    log("Launching installer...")
+                } catch (_: Exception) {
+                    // Installer unavailable — fall back to telling the user where the file is.
+                    log("Installer unavailable — open 02_FileManager and tap FreeFCC_update.apk")
+                }
+            } catch (e: Exception) {
+                log("Install failed: ${e.message}")
+            } finally {
+                update { copy(isBusy = false) }
             }
-        } catch (e: Exception) {
-            log("Install failed: ${e.message}")
         }
     }
 

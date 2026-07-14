@@ -6,6 +6,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
 
 /**
  * Checks for app updates by querying the GitHub Releases API.
@@ -17,7 +18,8 @@ import java.net.URL
  *
  * The download flow:
  *   1. Download the APK to app cache dir
- *   2. Return the file path — the ViewModel opens an install Intent
+ *   2. Verify the SHA-256 digest against the GitHub asset digest
+ *   3. Return the file path — the ViewModel opens an install Intent
  */
 data class UpdateInfo(
     val version: String,       // e.g. "1.4"
@@ -25,7 +27,8 @@ data class UpdateInfo(
     val changelog: String,    // release body (markdown)
     val downloadUrl: String,  // direct APK URL
     val apkSize: Long,        // bytes
-    val publishedAt: String  // ISO date
+    val publishedAt: String,  // ISO date
+    val sha256: String?       // expected hex digest from GitHub, or null if absent
 ) {
     fun isNewerThan(currentVersion: String): Boolean {
         val cur = parseVersion(currentVersion)
@@ -78,12 +81,15 @@ object UpdateChecker {
             val assets = json.optJSONArray("assets") ?: return null
             var apkUrl: String? = null
             var apkSize = 0L
+            var sha256: String? = null
             for (i in 0 until assets.length()) {
                 val asset = assets.getJSONObject(i)
                 val nameField = asset.optString("name", "")
                 if (nameField.endsWith(".apk", ignoreCase = true)) {
                     apkUrl = asset.optString("browser_download_url", "")
                     apkSize = asset.optLong("size", 0)
+                    // GitHub returns "sha256:<hex>" in the digest field.
+                    sha256 = asset.optString("digest", "").removePrefix("sha256:").ifEmpty { null }
                     break
                 }
             }
@@ -96,7 +102,8 @@ object UpdateChecker {
                 changelog = changelog,
                 downloadUrl = apkUrl,
                 apkSize = apkSize,
-                publishedAt = publishedAt
+                publishedAt = publishedAt,
+                sha256 = sha256
             )
         } catch (_: Exception) {
             null
@@ -108,7 +115,8 @@ object UpdateChecker {
     /**
      * Downloads the APK file to the app cache directory.
      * Calls onProgress with bytes downloaded / total bytes.
-     * Returns the downloaded file, or null on failure.
+     * Verifies the SHA-256 digest if the GitHub release provided one.
+     * Returns the downloaded file, or null on failure (including hash mismatch).
      */
     fun downloadApk(context: Context, info: UpdateInfo, onProgress: (Float) -> Unit): File? {
         var conn: HttpURLConnection? = null
@@ -123,21 +131,36 @@ object UpdateChecker {
             if (conn.responseCode != 200) return null
 
             val totalBytes = conn.contentLengthLong.coerceAtLeast(1L)
-            val outputFile = File(context.cacheDir, "freefcc_update.apk")
-            val fos = FileOutputStream(outputFile)
+            val outputDir = File(context.cacheDir, "updates").apply { mkdirs() }
+            val outputFile = File(outputDir, "freefcc_update.apk")
+            val md = info.sha256?.let { MessageDigest.getInstance("SHA-256") }
 
-            conn.inputStream.use { input ->
-                val buffer = ByteArray(8192)
-                var downloaded = 0L
-                while (true) {
-                    val read = input.read(buffer)
-                    if (read <= 0) break
-                    fos.write(buffer, 0, read)
-                    downloaded += read
-                    onProgress((downloaded.toFloat() / totalBytes).coerceIn(0f, 1f))
+            FileOutputStream(outputFile).use { fos ->
+                conn.inputStream.use { input ->
+                    val buffer = ByteArray(8192)
+                    var downloaded = 0L
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read <= 0) break
+                        fos.write(buffer, 0, read)
+                        md?.update(buffer, 0, read)
+                        downloaded += read
+                        onProgress((downloaded.toFloat() / totalBytes).coerceIn(0f, 1f))
+                    }
                 }
             }
-            fos.close()
+
+            // Verify the digest if GitHub provided one. A mismatch means the
+            // file was tampered with, the connection was MITM'd, or the
+            // release changed underneath us — refuse to install in all cases.
+            if (md != null) {
+                val actual = md.digest().joinToString("") { "%02x".format(it) }
+                if (!actual.equals(info.sha256, ignoreCase = true)) {
+                    outputFile.delete()
+                    return null
+                }
+            }
+
             outputFile
         } catch (_: Exception) {
             null

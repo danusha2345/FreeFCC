@@ -200,7 +200,7 @@ class DumlTransport {
 
     // Ports that DJI controllers may listen on for DUML commands.
     // RC2 uses 40009. RC Pro 2 and RC Plus use 40007 or 8901-8904.
-    private val SCAN_PORTS = listOf(PORT, PORT_LED, 8901, 8902, 8903, 8904)
+    private val SCAN_PORTS = listOf(PORT, PORT_LED, PORT_ALT_1, PORT_ALT_2, PORT_ALT_3, PORT_ALT_4)
 
     /**
      * Finds which port the DUML proxy is listening on by trying each one.
@@ -276,7 +276,7 @@ class DumlTransport {
         try {
             val effectivePort = if (port == PORT) findWorkingPort() else port
             socket = Socket()
-            socket.connect(InetSocketAddress(HOST, effectivePort), 2000)
+            socket.connect(InetSocketAddress(HOST, effectivePort), CONNECT_TIMEOUT_MS)
             socket.tcpNoDelay = true
             socket.soTimeout = readWindowMs
 
@@ -284,6 +284,10 @@ class DumlTransport {
 
             val input = socket.getInputStream()
             val header = readBytes(input, 11) ?: return null
+
+            // Guard against a short read returning fewer than 3 bytes —
+            // indexing header[0..2] for magic/length would otherwise throw.
+            if (header.size < 3) return null
 
             // Verify magic byte before trusting the encoded length enough to read more
             if (header[0] != 0x55.toByte()) return null
@@ -333,7 +337,7 @@ class DumlTransport {
         try {
             val port = findWorkingPort()
             socket = Socket()
-            socket.connect(InetSocketAddress(HOST, port), 2000)
+            socket.connect(InetSocketAddress(HOST, port), CONNECT_TIMEOUT_MS)
             socket.soTimeout = 200
 
             val buffer = StringBuilder()
@@ -376,7 +380,7 @@ class DumlTransport {
         var socket: Socket? = null
         return try {
             socket = Socket()
-            socket.connect(InetSocketAddress(HOST, port), 2000)
+            socket.connect(InetSocketAddress(HOST, port), CONNECT_TIMEOUT_MS)
             true
         } catch (_: IOException) { false }
         finally { try { socket?.close() } catch (_: IOException) {} }
@@ -392,16 +396,16 @@ class DumlTransport {
         var socket: Socket? = null
         try {
             socket = Socket()
-            socket.connect(InetSocketAddress(HOST, port), 2000)
+            socket.connect(InetSocketAddress(HOST, port), CONNECT_TIMEOUT_MS)
             socket.tcpNoDelay = true
             socket.soTimeout = maxOf(readWindowMs, 200)
 
             socket.getOutputStream().apply { write(frame); flush() }
 
             // Wait for the ACK so the controller has time to process
-            try { socket.getInputStream().read(ByteArray(2048)) } catch (_: IOException) {}
+            try { socket.getInputStream().read(ackBuffer) } catch (_: IOException) {}
             // Small settle delay to ensure the controller finished processing
-            Thread.sleep(20)
+            Thread.sleep(POST_ACK_SETTLE_MS)
             return true
         } catch (_: IOException) { return false }
         finally { try { socket?.close() } catch (_: IOException) {} }
@@ -467,7 +471,20 @@ class DumlTransport {
         private const val HOST = "127.0.0.1"
         const val PORT = 40009       // Standard DUML proxy port (FCC, CE, device info)
         const val PORT_LED = 40007   // LED control port
+        const val PORT_ALT_1 = 8901  // RC Pro 2 / RC Plus alternate port
+        const val PORT_ALT_2 = 8902
+        const val PORT_ALT_3 = 8903
+        const val PORT_ALT_4 = 8904
         // 4G frames go via Unix domain socket, not TCP
         private const val UNIX_SOCKET_4G = "/duss/mb/0x205"
+
+        /** TCP connect timeout for all socket opens to the DUML proxy. */
+        private const val CONNECT_TIMEOUT_MS = 2000
+
+        /** Settle delay after reading the ACK, before the next frame. */
+        private const val POST_ACK_SETTLE_MS = 20L
     }
+
+    /** Reused read buffer for ACK reads — avoids a per-frame allocation. */
+    private val ackBuffer = ByteArray(2048)
 }
