@@ -127,24 +127,42 @@ class FccKeepaliveService : Service() {
             while (true) {
                 // Delay at the loop start, not the end, so the interval is
                 // INTERVAL_MS regardless of how long the send takes. The first
-                // tick fires immediately (no delay before the first send).
+                // tick fires after INTERVAL_MS (not immediately).
                 delay(INTERVAL_MS)
-                if (HardwareLock.tryBegin()) {
-                    try {
-                        transport.sendFrames(
-                            frames = frames,
-                            rounds = 1,
-                            interFrameDelayMs = cachedInterFrameDelay,
-                            readWindowMs = cachedReadWindowMs,
-                            port = cachedPort
-                        )
-                    } catch (e: kotlinx.coroutines.CancellationException) {
-                        throw e
-                    } catch (_: Exception) {
-                    } finally {
-                        HardwareLock.end()
+                // Retry acquiring the lock with a short backoff instead of
+                // silently skipping the tick. This prevents a gap where DJI
+                // Fly can reset the radio to CE while another operation
+                // (LED, device info, manual FCC apply) holds the lock for
+                // ~1-2s. With the retry, FCC is re-applied within ~200ms
+                // of the lock being released, instead of up to INTERVAL_MS
+                // later.
+                var sent = false
+                for (retry in 0 until 10) {
+                    if (HardwareLock.tryBegin()) {
+                        try {
+                            transport.sendFrames(
+                                frames = frames,
+                                rounds = 1,
+                                interFrameDelayMs = cachedInterFrameDelay,
+                                readWindowMs = cachedReadWindowMs,
+                                port = cachedPort
+                            )
+                            sent = true
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (_: Exception) {
+                        } finally {
+                            HardwareLock.end()
+                        }
+                        break
                     }
+                    // Lock held by another op — wait 200ms and retry.
+                    // 10 retries × 200ms = 2s max wait, covering any
+                    // reasonable hardware operation.
+                    delay(200)
                 }
+                // If we never got the lock (another op held it for >2s),
+                // the next loop iteration will try again after INTERVAL_MS.
             }
         }
     }

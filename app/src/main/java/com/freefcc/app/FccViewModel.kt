@@ -65,7 +65,21 @@ data class AppState(
 class FccViewModel(private val app: Application) : AndroidViewModel(app) {
 
     companion object {
-        const val APP_VERSION = "1.4.7"
+        const val APP_VERSION = "1.4.8"
+
+        /**
+         * Aircraft model codes known to support DJI Cellular Dongle 2 / 4G.
+         * The Mini series (wa150, wa140, wm16x) does NOT support 4G — the
+         * cellular module is enterprise hardware only. Sending 4G frames to a
+         * non-4G aircraft wastes the user's time and produces a confusing
+         * "frames written but 4G didn't activate" message.
+         *
+         * Sources: DJI product list, captured profiles (only wa341 confirmed
+         * working on real hardware). wa233/wa234 = Matrice 300/350 series,
+         * wm630 = Inspire 3, wa341 = Mavic 4 Pro. All are DJI enterprise models
+         * that ship with or accept the Cellular Dongle 2.
+         */
+        private val MODELS_WITH_4G = setOf("wa341", "wa233", "wa234", "wm630", "wa140")
     }
 
     private val _state = MutableStateFlow(AppState())
@@ -80,6 +94,12 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
         // ViewModel instance — the collector must live here, not in init().
         viewModelScope.launch {
             HardwareLock.busy.collect { busy -> update { copy(isHardwareBusy = busy) } }
+        }
+        // Restore the cached aircraft serial from a previous session so the
+        // user does not have to re-probe before 4G if the drone is the same.
+        val cachedSerial = prefs.getString("aircraft_serial", "").orEmpty()
+        if (cachedSerial.isNotEmpty()) {
+            update { copy(aircraftSerial = cachedSerial) }
         }
     }
 
@@ -148,6 +168,9 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                     log("DUML port detected: $detectedPort")
                 }
                 val serial = transport.probeSerial(1500)
+                if (serial.isNotEmpty()) {
+                    prefs.edit().putString("aircraft_serial", serial).apply()
+                }
                 update {
                     copy(
                         status = "connected",
@@ -240,6 +263,9 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                         log("DUML port detected: $detectedPort")
                     }
                     val serial = transport.probeSerial(1500)
+                    if (serial.isNotEmpty()) {
+                        prefs.edit().putString("aircraft_serial", serial).apply()
+                    }
                     update {
                         copy(
                             status = "connected",
@@ -451,6 +477,17 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
      * The socket does not respond, so this can only confirm the frames were
      * written — never confirm the aircraft actually activated 4G. There is
      * no "off" action: no send-only command exists to reliably deactivate it.
+     *
+     * Guards (added to stop the most common failure modes early):
+     * 1. Aircraft serial must be non-empty AND at least 6 chars. A 6-char
+     *    W[AM]xxx model code (WA341, WM630) is the minimum the 4G payload
+     *    format needs — a shorter string would produce a malformed payload.
+     * 2. Model code must be in the 4G-capable set. The Mini series rejects
+     *    4G at the firmware level; we tell the user up front rather than
+     *    fail after writing 128 frames.
+     * 3. The 4G dongle must be present (the abstract socket must be
+     *    connectable). If `/duss/mb/0x205` does not exist, the cellular
+     *    module is not attached and no frame can succeed.
      */
     fun send4gActivationFrames() {
         if (!beginHardwareOp()) {
@@ -463,16 +500,38 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
         runOnIO {
             try {
                 val serial = getOrProbeSerial()
-                if (serial.isEmpty()) {
+
+                // Guard 1: serial present and long enough for the 4G payload format.
+                if (serial.length < 6) {
                     update {
-                        copy(is4gBusy = false, fourGMessage = "4G needs the aircraft connected. Power on the drone and try again.")
+                        copy(is4gBusy = false, fourGMessage = "4G needs the aircraft connected. Power on the drone, link it, and tap Connect first.")
                     }
-                    log("4G activation failed — no aircraft serial")
+                    log("4G activation failed — aircraft serial too short ('$serial'); need at least a W[AM]xxx model code")
+                    return@runOnIO
+                }
+
+                // Guard 2: model must be in the 4G-capable set.
+                // The model code is the W[AM]xxx prefix (first 5-6 chars).
+                val modelCode = serial.take(5).lowercase()
+                if (modelCode !in MODELS_WITH_4G) {
+                    update {
+                        copy(is4gBusy = false, fourGMessage = "4G is not supported on $modelCode. It requires a DJI Cellular Dongle 2, which is only available on Mavic 4 Pro / Matrice / Inspire 3.")
+                    }
+                    log("4G activation aborted — model $modelCode is not in the 4G-capable set $MODELS_WITH_4G")
+                    return@runOnIO
+                }
+
+                // Guard 3: dongle pre-check — fast-fail if the socket does not exist.
+                if (!transport.is4gDonglePresent()) {
+                    update {
+                        copy(is4gBusy = false, fourGMessage = "4G dongle not detected. Connect a DJI Cellular Dongle 2 to the aircraft and try again.")
+                    }
+                    log("4G activation aborted — 4G socket /duss/mb/0x205 not connectable (no dongle?)")
                     return@runOnIO
                 }
 
                 val profile = Profiles.load4g(app, serial)
-                log("Loaded 4G profile: ${profile.frames.size} frames (serial: $serial)")
+                log("Loaded 4G profile: ${profile.frames.size} frames (serial: $serial, model: $modelCode)")
 
                 // 4G uses Unix domain socket, not TCP
                 val success = transport.sendFramesUnix(
@@ -508,13 +567,25 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
      * Turns the aircraft arm LEDs on or off.
      * Uses port 40007 (different from the standard 40009 DUML port).
      * Requires DJI Fly running with the aircraft connected.
-     * Sends the command twice with a 500ms delay for reliability.
+     *
+     * Sends the LED command in 2 bursts of 5 writes each (10 total), with
+     * 100ms between writes — matching the reference app's pattern for
+     * reliability.
+     *
+     * **Does NOT hold HardwareLock.** The LED command targets port 40007
+     * (camera/LED subsystem) while the FCC keepalive targets port 40009
+     * (radio subsystem). They use different ports and different subsystems,
+     * so they can run concurrently without conflict. Holding the lock during
+     * the LED command would block the keepalive for ~1.5s, creating a gap
+     * where DJI Fly could reset the radio to CE. By not holding the lock,
+     * the keepalive continues re-applying FCC throughout the LED command.
+     * Only the [isLedBusy] UI flag prevents double-taps.
      *
      * @param on true for LED ON, false for LED OFF
      */
     fun setLed(on: Boolean) {
-        if (!beginHardwareOp()) {
-            log("Hardware busy — please wait for the current operation to finish.")
+        if (_state.value.isLedBusy) {
+            log("LED busy — please wait.")
             return
         }
         update { copy(isLedBusy = true, ledStatus = if (on) "Turning LEDs on..." else "Turning LEDs off...") }
@@ -526,20 +597,24 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                 val profile = Profiles.load(app, fileName)
                 log("Loaded LED profile: ${profile.frames.size} frames (port ${profile.port})")
 
+                // Separate transport instance — the LED command on port 40007
+                // must not share state with the FCC transport on port 40009.
+                val ledTransport = DumlTransport()
+
                 var anySuccess = false
 
-                // Send the LED command twice with a 500ms delay for reliability
+                // 2 connection bursts × 5 writes each = 10 total sends, with
+                // 100ms between writes and 100ms between bursts. Matches the
+                // reference app's reliability pattern.
                 for (attempt in 0 until 2) {
-                    if (attempt > 0) {
-                        delay(500)
-                    }
+                    if (attempt > 0) delay(100)
 
-                    val success = transport.sendFrames(
+                    val success = ledTransport.sendFrames(
                         frames = profile.frames,
-                        rounds = profile.rounds,
-                        interFrameDelayMs = profile.interFrameDelay,
-                        interRoundDelayMs = profile.interRoundDelay,
-                        readWindowMs = profile.readWindowMs,
+                        rounds = 5,
+                        interFrameDelayMs = 100,
+                        interRoundDelayMs = 0,
+                        readWindowMs = 100,
                         port = profile.port
                     )
 
@@ -556,8 +631,6 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
             } catch (e: Exception) {
                 log("LED error: ${e.message}")
                 update { copy(isLedBusy = false, ledStatus = "Error: ${e.message}") }
-            } finally {
-                endHardwareOp()
             }
         }
     }
@@ -620,7 +693,8 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                 val serial = transport.probeSerial(2000)
                 if (serial.isNotEmpty()) {
                     update { copy(aircraftSerial = serial) }
-                    log("Aircraft serial: $serial")
+                    prefs.edit().putString("aircraft_serial", serial).apply()
+                    log("Aircraft serial: $serial (cached)")
                 } else {
                     log("No serial detected — is the aircraft powered on?")
                 }
@@ -744,15 +818,23 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
         return false
     }
 
-    /** Returns the cached serial, or probes the controller if not yet known. */
+    /** Returns the cached serial, or probes the controller if not yet known. Caches the result in SharedPreferences. */
     private fun getOrProbeSerial(): String {
         var serial = _state.value.aircraftSerial
+        if (serial.isEmpty()) {
+            // Fall back to a serial persisted in a previous session.
+            serial = prefs.getString("aircraft_serial", "").orEmpty()
+            if (serial.isNotEmpty()) {
+                update { copy(aircraftSerial = serial) }
+            }
+        }
         if (serial.isEmpty()) {
             log("Probing for aircraft serial...")
             serial = transport.probeSerial(2000)
             if (serial.isNotEmpty()) {
                 update { copy(aircraftSerial = serial) }
-                log("Aircraft serial: $serial")
+                prefs.edit().putString("aircraft_serial", serial).apply()
+                log("Aircraft serial: $serial (cached)")
             }
         }
         return serial

@@ -5,11 +5,11 @@ never be a feature in FreeFCC. If anyone asks why, point them here.
 
 ## The Short Version
 
-FCC unlock, 4G activation, LED control, and altitude limit changes are in
-a gray area. They are legal in some regions and you can get authorization
-to use them. Remote ID disabling is different. It is explicitly illegal in
-the US (FAA), EU (EASA), UK (CAA), and most other regulated airspace. This
-is not a gray area. It is actual law.
+FCC unlock, 4G activation, and LED control are in a gray area. They are
+legal in some regions and you can get authorization to use them. Remote ID
+disabling is different. It is explicitly illegal in the US (FAA), EU
+(EASA), UK (CAA), and most other regulated airspace. This is not a gray
+area. It is actual law.
 
 ## The Real-World Danger
 
@@ -31,10 +31,12 @@ from the aircraft that need to see you to avoid hitting you.
 - **FCC unlock** switches the radio to a power level that is legal in
   FCC-authorized regions. If you have authorization or live in an
   FCC region, this is fine.
-- **Altitude limit** raises the ceiling from 120m to 500m, which is the
-  FCC regulatory maximum. Still within legal limits in authorized regions.
 - **4G activation** enables hardware the user already owns.
 - **LED control** is just lights. Completely harmless.
+
+Note: FreeFCC does NOT raise the altitude ceiling. The 120m CE limit is
+enforced by the DJI Fly app via a C0 class flag, not by drone firmware —
+no DUML command can lift it. See the README for the full explanation.
 
 All of these are arguable as legitimate features for people in the right
 regions or with the right authorization. Remote ID disable has no
