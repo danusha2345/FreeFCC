@@ -773,6 +773,14 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Re-downloads the update after a failed install. Resets the downloaded state first. */
+    fun reDownloadUpdate() {
+        if (_state.value.isDownloadingUpdate) return
+        downloadedApk = null
+        update { copy(isUpdateDownloaded = false) }
+        downloadUpdate()
+    }
+
     fun installUpdate() {
         val file = downloadedApk ?: run {
             log("No downloaded APK found — download first")

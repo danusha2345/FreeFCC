@@ -718,7 +718,7 @@ private fun UpdatePage(state: AppState, viewModel: FccViewModel) {
                         }
                         Spacer(Modifier.height(12.dp))
                         GlowButton("Download Again", Cyan, filled = false) {
-                            viewModel.downloadUpdate()
+                            viewModel.reDownloadUpdate()
                         }
                     }
                     else -> {
@@ -727,6 +727,17 @@ private fun UpdatePage(state: AppState, viewModel: FccViewModel) {
                         }
                     }
                 }
+            }
+
+            // "Check Again" button — always visible at the bottom of the
+            // update card, whether up-to-date or an update is available.
+            // Uses force=true to bypass the rate-limit so the user can
+            // recheck immediately at any time.
+            Spacer(Modifier.height(20.dp))
+            DividerLine()
+            Spacer(Modifier.height(16.dp))
+            GlowButton("Check Again", Cyan, filled = false) {
+                viewModel.checkForUpdates(force = true)
             }
         }
     }
