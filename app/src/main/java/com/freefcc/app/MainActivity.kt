@@ -59,7 +59,11 @@ private val TextWhite = Color(0xFFF0F4FF)
 private val TextGray = Color(0xFF7A85A3)
 private val TextDim = Color(0xFF4A5374)
 
-private val BottomNavHeight = 72.dp
+private val BottomNavHeight = 60.dp
+private val PageHorizontalPadding = 16.dp
+private val PageTopPadding = 24.dp
+private val PageBottomPadding = 16.dp
+private val SectionSpacing = 10.dp
 
 // ═══════════════════════════════════════════════════════════════════════
 // Activity
@@ -119,7 +123,7 @@ private fun AppRoot(viewModel: FccViewModel) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(300.dp)
+                .height(220.dp)
                 .align(Alignment.TopCenter)
                 .background(
                     Brush.radialGradient(
@@ -166,19 +170,19 @@ private fun FccPage(state: AppState, viewModel: FccViewModel) {
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 24.dp)
-            .padding(bottom = BottomNavHeight + 32.dp),
+            .padding(horizontal = PageHorizontalPadding)
+            .padding(bottom = BottomNavHeight + PageBottomPadding),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Spacer(Modifier.height(56.dp))
+        Spacer(Modifier.height(PageTopPadding))
         AppHeader(state.controllerModel)
-        Spacer(Modifier.height(28.dp))
+        Spacer(Modifier.height(12.dp))
         ConnectionPill(state)
 
         // Update-available banner — shows on the FCC page so the user
         // doesn't have to manually check the Update tab.
         if (state.updateAvailable && updateInfo != null && !state.isCheckingUpdate) {
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(SectionSpacing))
             GlowCard {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -206,11 +210,11 @@ private fun FccPage(state: AppState, viewModel: FccViewModel) {
             }
         }
 
-        Spacer(Modifier.height(28.dp))
+        Spacer(Modifier.height(12.dp))
 
         GlowCard {
             ModeBadge(state)
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(12.dp))
 
             when {
                 state.isBusy -> {
@@ -218,20 +222,20 @@ private fun FccPage(state: AppState, viewModel: FccViewModel) {
                 }
                 !state.isConnected -> {
                     BodyText("Connect your drone to the controller, then power it on.")
-                    Spacer(Modifier.height(20.dp))
+                    Spacer(Modifier.height(8.dp))
                     GlowButton("Connect", Cyan, enabled = !state.isHardwareBusy) { viewModel.connect() }
                 }
                 state.isFccEnabled -> {
                     BodyText("FCC sequence was written. Verify the region in DJI Fly.", Green)
-                    Spacer(Modifier.height(20.dp))
+                    Spacer(Modifier.height(8.dp))
                     GlowButton("Stop FCC Mode", Red, enabled = !state.isHardwareBusy) { viewModel.disableFcc() }
-                    Spacer(Modifier.height(12.dp))
+                    Spacer(Modifier.height(8.dp))
                     GlowButton("Re-Apply FCC", Cyan, filled = false, enabled = !state.isHardwareBusy) { viewModel.enableFcc() }
-                    Spacer(Modifier.height(12.dp))
+                    Spacer(Modifier.height(8.dp))
                     GlowButton("Launch DJI Fly", Green, filled = false, enabled = !state.isHardwareBusy) {
                         viewModel.launchDjiFly()
                     }
-                    Spacer(Modifier.height(16.dp))
+                    Spacer(Modifier.height(10.dp))
                     // Keepalive toggle
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -266,22 +270,22 @@ private fun FccPage(state: AppState, viewModel: FccViewModel) {
                 else -> {
                     if (state.message.isNotEmpty()) {
                         BodyText(state.message)
-                        Spacer(Modifier.height(20.dp))
+                        Spacer(Modifier.height(12.dp))
                     } else {
                         BodyText("Tap the button below to enable FCC mode.")
-                        Spacer(Modifier.height(20.dp))
+                        Spacer(Modifier.height(12.dp))
                     }
                     GlowButton("Enable FCC Mode", Cyan, enabled = !state.isHardwareBusy) { viewModel.enableFcc() }
                 }
             }
 
             if (state.aircraftSerial.isNotEmpty()) {
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(10.dp))
                 SerialRow(state.aircraftSerial, enabled = !state.isHardwareBusy) { viewModel.probeSerial() }
             }
         }
 
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(SectionSpacing))
 
         AnimatedVisibility(
             visible = state.isConnected,
@@ -308,13 +312,13 @@ private fun FccPage(state: AppState, viewModel: FccViewModel) {
                             modifier = Modifier.weight(1f)
                         )
                     }
-                    Spacer(Modifier.height(12.dp))
+                    Spacer(Modifier.height(8.dp))
                     BodyText(
                         if (state.fourGMessage.isNotEmpty()) state.fourGMessage
-                        else "Experimental captured 4G profile. First probe the local DUSS endpoint; endpoint availability does not prove activation compatibility.",
+                        else "Experimental. Probe the DUSS endpoint first; reachability does not prove activation.",
                         TextGray
                     )
-                    Spacer(Modifier.height(12.dp))
+                    Spacer(Modifier.height(8.dp))
                     OutlinedButton(
                         onClick = { viewModel.probe4gEndpoint() },
                         enabled = !state.isHardwareBusy && !state.is4gBusy,
@@ -325,7 +329,7 @@ private fun FccPage(state: AppState, viewModel: FccViewModel) {
                         Spacer(Modifier.width(8.dp))
                         Text("Probe 4G Endpoint")
                     }
-                    Spacer(Modifier.height(12.dp))
+                    Spacer(Modifier.height(8.dp))
 
                     if (state.is4gBusy) {
                         ProgressDisplay(state.busyProgress, "Sending 4G activation frames...")
@@ -335,12 +339,11 @@ private fun FccPage(state: AppState, viewModel: FccViewModel) {
                         }
                     }
                 }
-                Spacer(Modifier.height(16.dp))
             }
         }
 
         // LED control card
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(SectionSpacing))
         GlowCard {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -350,7 +353,7 @@ private fun FccPage(state: AppState, viewModel: FccViewModel) {
                     Text("Aircraft LEDs", color = TextWhite, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        "Turn aircraft LEDs on or off. On Avata 360, LED OFF also blanks the battery indicators. Requires DJI Fly running with aircraft connected.",
+                        "Requires DJI Fly and a linked aircraft. On Avata 360, OFF also blanks battery indicators.",
                         color = TextGray,
                         fontSize = 12.sp,
                         lineHeight = 17.sp
@@ -366,7 +369,7 @@ private fun FccPage(state: AppState, viewModel: FccViewModel) {
                     }
                 }
             }
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(10.dp))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Button(
                     onClick = { viewModel.setLed(true) },
@@ -379,7 +382,7 @@ private fun FccPage(state: AppState, viewModel: FccViewModel) {
                     ),
                     shape = RoundedCornerShape(12.dp),
                     border = BorderStroke(1.dp, Green.copy(0.3f)),
-                    modifier = Modifier.weight(1f).height(48.dp)
+                    modifier = Modifier.weight(1f).height(44.dp)
                 ) {
                     Text("LED ON", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                 }
@@ -394,7 +397,7 @@ private fun FccPage(state: AppState, viewModel: FccViewModel) {
                     ),
                     shape = RoundedCornerShape(12.dp),
                     border = BorderStroke(1.5.dp, TextGray.copy(0.5f)),
-                    modifier = Modifier.weight(1f).height(48.dp)
+                    modifier = Modifier.weight(1f).height(44.dp)
                 ) {
                     Text("LED OFF", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                 }
@@ -402,7 +405,7 @@ private fun FccPage(state: AppState, viewModel: FccViewModel) {
         }
 
         // Auto-FCC toggle card
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(SectionSpacing))
         GlowCard {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -412,7 +415,7 @@ private fun FccPage(state: AppState, viewModel: FccViewModel) {
                     Text("Auto-FCC", color = TextWhite, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        "Auto-connect, apply FCC, start keepalive, and launch DJI Fly.",
+                        "Connect, apply FCC, start keepalive, then open DJI Fly.",
                         color = TextGray,
                         fontSize = 12.sp,
                         lineHeight = 17.sp
@@ -441,33 +444,33 @@ private fun InfoPage(state: AppState, viewModel: FccViewModel) {
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 24.dp)
-            .padding(bottom = BottomNavHeight + 32.dp),
+            .padding(horizontal = PageHorizontalPadding)
+            .padding(bottom = BottomNavHeight + PageBottomPadding),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Spacer(Modifier.height(56.dp))
+        Spacer(Modifier.height(PageTopPadding))
         PageTitle("Device Info", Icons.Outlined.Info)
-        Spacer(Modifier.height(28.dp))
+        Spacer(Modifier.height(14.dp))
 
         GlowCard {
             Text("Connection", color = TextWhite, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(10.dp))
             InfoRow("Controller", state.controllerModel.ifEmpty { "Unknown" })
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(8.dp))
             DividerLine()
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(8.dp))
             InfoRow(
                 "Status",
                 if (state.isConnected) "Connected" else "Disconnected",
                 valueColor = if (state.isConnected) Green else TextGray
             )
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(8.dp))
             DividerLine()
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(8.dp))
             InfoRow("Aircraft S/N", state.aircraftSerial.ifEmpty { "Not detected" })
         }
 
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(SectionSpacing))
 
         GlowCard {
             Row(
@@ -492,7 +495,7 @@ private fun InfoPage(state: AppState, viewModel: FccViewModel) {
                     }
                 }
             }
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(8.dp))
 
             if (state.deviceInfo.isNotEmpty()) {
                 Text(
@@ -522,13 +525,13 @@ private fun LogPage(state: AppState, viewModel: FccViewModel) {
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 24.dp)
-            .padding(bottom = BottomNavHeight + 32.dp),
+            .padding(horizontal = PageHorizontalPadding)
+            .padding(bottom = BottomNavHeight + PageBottomPadding),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Spacer(Modifier.height(56.dp))
+        Spacer(Modifier.height(PageTopPadding))
         PageTitle("Activity Log", Icons.Outlined.History)
-        Spacer(Modifier.height(28.dp))
+        Spacer(Modifier.height(14.dp))
 
         GlowCard {
             Row(
@@ -555,24 +558,24 @@ private fun LogPage(state: AppState, viewModel: FccViewModel) {
                 }
             }
             if (state.lanLogMessage.isNotEmpty()) {
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(8.dp))
                 BodyText(
                     state.lanLogMessage,
                     if (state.lanLogMessage.contains("failed", ignoreCase = true)) Red else TextGray
                 )
             }
             if (state.lanLogUrl.isNotEmpty()) {
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(4.dp))
                 BodyText("Codex can discover this controller through the UDP beacon; no link copying is needed.", TextDim)
             }
         }
 
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(SectionSpacing))
 
         GlowCard {
             if (state.logMessages.isEmpty()) {
                 Box(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp),
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     BodyText("No activity yet.", TextDim)
@@ -609,7 +612,7 @@ private fun LogPage(state: AppState, viewModel: FccViewModel) {
                             color = color,
                             fontSize = 11.sp,
                             fontFamily = FontFamily.Monospace,
-                            modifier = Modifier.padding(vertical = 6.dp)
+                            modifier = Modifier.padding(vertical = 4.dp)
                         )
                     }
                 }
@@ -628,22 +631,22 @@ private fun UpdatePage(state: AppState, viewModel: FccViewModel) {
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 24.dp)
-            .padding(bottom = BottomNavHeight + 32.dp),
+            .padding(horizontal = PageHorizontalPadding)
+            .padding(bottom = BottomNavHeight + PageBottomPadding),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Spacer(Modifier.height(56.dp))
+        Spacer(Modifier.height(PageTopPadding))
         PageTitle("Updates", Icons.Outlined.SystemUpdate)
 
         if (state.isCheckingUpdate) {
-            Spacer(Modifier.height(28.dp))
+            Spacer(Modifier.height(14.dp))
             GlowCard {
                 Column(
                     Modifier.fillMaxWidth(),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     CircularProgressIndicator(strokeWidth = 2.5.dp, color = Cyan, modifier = Modifier.size(40.dp))
-                    Spacer(Modifier.height(16.dp))
+                    Spacer(Modifier.height(10.dp))
                     BodyText("Checking GitHub for latest release...", Cyan)
                 }
             }
@@ -652,7 +655,7 @@ private fun UpdatePage(state: AppState, viewModel: FccViewModel) {
 
         val info = state.updateInfo
         if (info == null && state.updateChecked) {
-            Spacer(Modifier.height(28.dp))
+            Spacer(Modifier.height(14.dp))
             GlowCard {
                 Column(
                     Modifier.fillMaxWidth(),
@@ -666,7 +669,7 @@ private fun UpdatePage(state: AppState, viewModel: FccViewModel) {
                         "Make sure you're connected to Wi-Fi and try again.",
                         color = TextDim, fontSize = 12.sp, lineHeight = 17.sp
                     )
-                    Spacer(Modifier.height(20.dp))
+                    Spacer(Modifier.height(12.dp))
                     GlowButton("Retry", Cyan) { viewModel.checkForUpdates(force = true) }
                 }
             }
@@ -675,7 +678,7 @@ private fun UpdatePage(state: AppState, viewModel: FccViewModel) {
 
         if (info == null) return@Column
 
-        Spacer(Modifier.height(28.dp))
+        Spacer(Modifier.height(14.dp))
 
         GlowCard {
             Row(
@@ -705,9 +708,9 @@ private fun UpdatePage(state: AppState, viewModel: FccViewModel) {
             }
 
             if (state.updateAvailable) {
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(10.dp))
                 DividerLine()
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(10.dp))
             }
 
             if (state.updateAvailable) {
@@ -735,9 +738,9 @@ private fun UpdatePage(state: AppState, viewModel: FccViewModel) {
                 }
             }
 
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(12.dp))
             DividerLine()
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(12.dp))
 
             Text("Changelog", color = Cyan, fontSize = 14.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(10.dp))
@@ -753,7 +756,7 @@ private fun UpdatePage(state: AppState, viewModel: FccViewModel) {
             }
 
             if (state.updateAvailable) {
-                Spacer(Modifier.height(24.dp))
+                Spacer(Modifier.height(14.dp))
                 when {
                     state.isDownloadingUpdate -> {
                         ProgressDisplay(
@@ -765,7 +768,7 @@ private fun UpdatePage(state: AppState, viewModel: FccViewModel) {
                         GlowButton("Install Update", Green) {
                             viewModel.installUpdate()
                         }
-                        Spacer(Modifier.height(12.dp))
+                        Spacer(Modifier.height(8.dp))
                         GlowButton("Download Again", Cyan, filled = false) {
                             viewModel.reDownloadUpdate()
                         }
@@ -782,9 +785,9 @@ private fun UpdatePage(state: AppState, viewModel: FccViewModel) {
             // update card, whether up-to-date or an update is available.
             // Uses force=true to bypass the rate-limit so the user can
             // recheck immediately at any time.
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(12.dp))
             DividerLine()
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(10.dp))
             GlowButton("Check Again", Cyan, filled = false) {
                 viewModel.checkForUpdates(force = true)
             }
@@ -957,11 +960,11 @@ private fun AppHeader(model: String) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             contentAlignment = Alignment.Center,
-            modifier = Modifier.size(200.dp, 60.dp)
+            modifier = Modifier.size(168.dp, 44.dp)
         ) {
             Box(
                 Modifier
-                    .size(200.dp, 60.dp)
+                    .size(168.dp, 44.dp)
                     .background(
                         Brush.radialGradient(
                             listOf(Cyan.copy(glowAlpha * 0.12f), Color.Transparent),
@@ -972,12 +975,12 @@ private fun AppHeader(model: String) {
             Text(
                 "FreeFCC",
                 color = Cyan.copy(alpha = glowAlpha),
-                fontSize = 32.sp,
+                fontSize = 27.sp,
                 fontWeight = FontWeight.Black,
                 letterSpacing = 1.sp
             )
         }
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(2.dp))
         Text(
             if (model.isNotEmpty()) "v${FccViewModel.APP_VERSION} · $model" else "v${FccViewModel.APP_VERSION}",
             color = TextDim,
@@ -990,9 +993,9 @@ private fun AppHeader(model: String) {
 @Composable
 private fun PageTitle(title: String, icon: androidx.compose.ui.graphics.vector.ImageVector) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Icon(icon, null, tint = Cyan, modifier = Modifier.size(26.dp))
-        Spacer(Modifier.width(12.dp))
-        Text(title, color = TextWhite, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+        Icon(icon, null, tint = Cyan, modifier = Modifier.size(22.dp))
+        Spacer(Modifier.width(9.dp))
+        Text(title, color = TextWhite, fontSize = 21.sp, fontWeight = FontWeight.Bold)
     }
 }
 
@@ -1026,7 +1029,7 @@ private fun ConnectionPill(state: AppState) {
         shape = CircleShape,
         border = BorderStroke(1.dp, color.copy(0.3f)),
         modifier = Modifier
-            .padding(4.dp)
+            .padding(2.dp)
             .scale(bounce.value)
             .drawBehind {
                 if (glowAlpha > 0f) {
@@ -1036,7 +1039,7 @@ private fun ConnectionPill(state: AppState) {
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp)
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
         ) {
             Box(
                 modifier = Modifier
@@ -1074,9 +1077,9 @@ private fun ModeBadge(state: AppState) {
         horizontalArrangement = Arrangement.SpaceBetween,
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(12.dp))
             .background(bgBrush)
-            .padding(horizontal = 24.dp, vertical = 18.dp)
+            .padding(horizontal = 16.dp, vertical = 12.dp)
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
@@ -1090,7 +1093,7 @@ private fun ModeBadge(state: AppState) {
             Text(
                 if (active) "FCC SENT" else "DEFAULT",
                 color = if (active) Green else TextWhite,
-                fontSize = 30.sp,
+                fontSize = 26.sp,
                 fontWeight = FontWeight.Black
             )
             Spacer(Modifier.height(4.dp))
@@ -1234,13 +1237,13 @@ private fun StatusDot(color: Color) {
 private fun GlowCard(content: @Composable () -> Unit) {
     Surface(
         color = CardBg,
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(14.dp),
         border = BorderStroke(1.dp, CardBorder),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(
             modifier = Modifier
-                .padding(20.dp)
+                .padding(14.dp)
                 .fillMaxWidth()
         ) {
             content()
@@ -1265,7 +1268,7 @@ private fun GlowButton(
             disabledContainerColor = color.copy(0.2f),
             disabledContentColor = color.copy(0.4f)
         ),
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(10.dp),
         border = when {
             !filled && enabled -> BorderStroke(1.5.dp, color.copy(0.6f))
             filled && enabled -> BorderStroke(1.dp, color.copy(0.3f))
@@ -1273,9 +1276,9 @@ private fun GlowButton(
         },
         modifier = Modifier
             .fillMaxWidth()
-            .height(52.dp)
+            .height(46.dp)
     ) {
-        Text(text, fontWeight = FontWeight.Bold, fontSize = 15.sp, letterSpacing = 0.5.sp)
+        Text(text, fontWeight = FontWeight.Bold, fontSize = 14.sp, letterSpacing = 0.3.sp)
     }
 }
 
@@ -1334,7 +1337,7 @@ private fun BottomNavBar(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(BottomNavHeight)
-                .padding(horizontal = 16.dp),
+                .padding(horizontal = 10.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -1350,14 +1353,14 @@ private fun BottomNavBar(
                             onClick = { onPageSelected(index) },
                             role = Role.Tab
                         )
-                        .padding(vertical = 8.dp)
+                        .padding(vertical = 4.dp)
                 ) {
                     Icon(
                         icon, label,
                         tint = if (selected) color else TextDim,
-                        modifier = Modifier.size(24.dp)
+                        modifier = Modifier.size(21.dp)
                     )
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(2.dp))
                     Text(
                         label,
                         color = if (selected) color else TextDim,
@@ -1365,11 +1368,11 @@ private fun BottomNavBar(
                         fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
                         maxLines = 1
                     )
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(2.dp))
                     Box(
                         modifier = Modifier
                             .width(24.dp)
-                            .height(3.dp)
+                            .height(2.dp)
                             .clip(RoundedCornerShape(2.dp))
                             .background(if (selected) color else Color.Transparent)
                     )
