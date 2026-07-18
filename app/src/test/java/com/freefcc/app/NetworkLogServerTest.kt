@@ -136,6 +136,42 @@ class NetworkLogServerTest {
     }
 
     @Test
+    fun apiAcceptsMaximumWireHexFormBody() {
+        val password = "test_password_123"
+        var receivedWireLength = 0
+        val server = NetworkLogServer(
+            logSnapshot = { emptyList() },
+            apiCommandHandler = { params ->
+                receivedWireLength = params["wire_hex"].orEmpty().length
+                NetworkApiResponse(200, "{\"ok\":true}")
+            },
+            addressProvider = { InetAddress.getLoopbackAddress() },
+            passwordProvider = { password },
+            requestedPort = 0
+        )
+
+        try {
+            val endpoint = server.start()
+            val body = "command=wire_exchange&wire_hex=${"aa".repeat(4_096)}"
+            val response = request(
+                endpoint.port,
+                "POST",
+                "/api/command",
+                headers = mapOf(
+                    "X-FreeFCC-Password" to password,
+                    "Content-Type" to "application/x-www-form-urlencoded"
+                ),
+                body = body
+            )
+
+            assertTrue(response.startsWith("HTTP/1.1 200 OK"))
+            assertTrue(receivedWireLength == 8_192)
+        } finally {
+            server.close()
+        }
+    }
+
+    @Test
     fun startRebindsWhenWifiAddressChanges() {
         var currentAddress = InetAddress.getByName("127.0.0.1")
         val server = NetworkLogServer(

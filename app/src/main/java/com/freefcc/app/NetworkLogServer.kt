@@ -351,7 +351,8 @@ internal class NetworkLogServer(
         private const val FORM_CONTENT_TYPE = "application/x-www-form-urlencoded"
         private const val MAX_REQUEST_LINE = 4_096
         private const val MAX_HEADER_LINE = 4_096
-        private const val MAX_BODY_LENGTH = 8_192
+        // A 4 KiB wire payload expands to 8 KiB of hex plus form field names.
+        private const val MAX_BODY_LENGTH = 16_384
         private const val MAX_HEADER_LINES = 32
         private const val MAX_CLIENTS = 4
         private const val MAX_PENDING_CLIENTS = 8

@@ -2,9 +2,11 @@ package com.freefcc.app
 
 import android.net.LocalSocket
 import android.net.LocalSocketAddress
+import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.SocketTimeoutException
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -32,8 +34,34 @@ data class DumlFrame(
 )
 
 data class DumlRawExchange(
-    val responseFrame: ByteArray?,
-    val validatedPayload: ByteArray?
+    val matchedFrame: ByteArray?,
+    val validatedPayload: ByteArray?,
+    val lastCompleteUnmatchedFrame: ByteArray?,
+    val partialTail: ByteArray?,
+    val writeCompleted: Boolean,
+    val failureStage: String? = null
+) {
+    /**
+     * Backward-compatible primary evidence for existing callers. A complete
+     * unmatched frame is preferred over a later partial tail so diagnostics do
+     * not discard the last structurally valid frame.
+     */
+    val responseFrame: ByteArray?
+        get() = matchedFrame ?: lastCompleteUnmatchedFrame ?: partialTail
+}
+
+data class WireExchangeResult(
+    val writeCompleted: Boolean,
+    val responseBytes: ByteArray,
+    val failureStage: String? = null
+)
+
+private data class DumlStreamResult(
+    val completeFrames: List<ByteArray>,
+    val matchedFrame: ByteArray?,
+    val matchedPayload: ByteArray?,
+    val lastCompleteUnmatchedFrame: ByteArray?,
+    val partialTail: ByteArray?
 )
 
 /**
@@ -300,8 +328,12 @@ class DumlTransport {
     }
 
     /** Sends one already-built frame to the exact requested port. */
-    fun sendFrame(frame: ByteArray, readWindowMs: Int = 80, port: Int = PORT): Boolean =
-        sendOneFrame(frame, readWindowMs, port)
+    fun sendFrame(
+        frame: ByteArray,
+        readWindowMs: Int = 80,
+        port: Int = PORT,
+        onWriteFlushed: () -> Unit = {}
+    ): Boolean = sendOneFrame(frame, readWindowMs, port, onWriteFlushed)
 
     /**
      * Sends one request and retains both the raw response frame and the payload
@@ -313,70 +345,53 @@ class DumlTransport {
         frame: ByteArray,
         readWindowMs: Int = 500,
         port: Int = PORT,
-        autoDetectPort: Boolean = true
+        autoDetectPort: Boolean = true,
+        onWriteFlushed: () -> Unit = {}
     ): DumlRawExchange {
         var socket: Socket? = null
+        var failureStage = "connect"
+        var writeCompleted = false
         try {
             val effectivePort = if (autoDetectPort && port == PORT) findWorkingPort() else port
             socket = Socket()
             socket.connect(InetSocketAddress(HOST, effectivePort), CONNECT_TIMEOUT_MS)
             socket.tcpNoDelay = true
-            val deadlineNanos = System.nanoTime() + readWindowMs.coerceAtLeast(1) * 1_000_000L
 
-            fun remainingTimeoutMs(): Int {
-                val remainingNanos = deadlineNanos - System.nanoTime()
-                if (remainingNanos <= 0) return 0
-                return ((remainingNanos + 999_999L) / 1_000_000L)
-                    .coerceAtMost(Int.MAX_VALUE.toLong())
-                    .toInt()
-            }
-
+            failureStage = "write"
             socket.getOutputStream().apply { write(frame); flush() }
-
-            val input = socket.getInputStream()
-            var lastCompleteFrame: ByteArray? = null
+            writeCompleted = true
+            failureStage = "read"
+            onWriteFlushed()
 
             // The controller proxy may emit unsolicited telemetry before the
             // response to our request. Consume complete unrelated frames until
             // the strict validator finds the matching route/sequence/cmd or the
             // caller's overall read window expires.
-            while (true) {
-                val headerTimeout = remainingTimeoutMs()
-                if (headerTimeout <= 0) return DumlRawExchange(lastCompleteFrame, null)
-                val header = readBytesUntilDeadline(input, 11, socket, deadlineNanos)
-                    ?: return DumlRawExchange(lastCompleteFrame, null)
-
-                // A partial or malformed header loses stream alignment, so it
-                // is returned as the strongest available evidence.
-                if (header.size < 3) return DumlRawExchange(header, null)
-                if (header[0] != 0x55.toByte()) return DumlRawExchange(header, null)
-
-                val totalLength = (header[1].toInt() and 0xFF) or
-                    ((header[2].toInt() and 0x03) shl 8)
-                if (totalLength < 13 || totalLength > 1023) {
-                    return DumlRawExchange(header, null)
-                }
-                if (header.size < 11) return DumlRawExchange(header, null)
-
-                val bodyTimeout = remainingTimeoutMs()
-                if (bodyTimeout <= 0) return DumlRawExchange(header, null)
-                val expectedBodySize = totalLength - 11
-                val remaining = readBytesUntilDeadline(input, expectedBodySize, socket, deadlineNanos)
-                    ?: return DumlRawExchange(header, null)
-                val response = header + remaining
-                if (remaining.size != expectedBodySize) {
-                    return DumlRawExchange(response, null)
-                }
-
-                lastCompleteFrame = response
-                val payload = DumlBuilder.validateResponse(frame, response)
-                if (payload != null) {
-                    return DumlRawExchange(response, payload)
-                }
-            }
+            val result = readDumlStream(
+                input = socket.getInputStream(),
+                socket = socket,
+                deadlineNanos = System.nanoTime() +
+                    readWindowMs.coerceAtLeast(1) * 1_000_000L,
+                maxFrames = Int.MAX_VALUE,
+                matcher = { response -> DumlBuilder.validateResponse(frame, response) }
+            )
+            return DumlRawExchange(
+                matchedFrame = result.matchedFrame,
+                validatedPayload = result.matchedPayload,
+                lastCompleteUnmatchedFrame = result.lastCompleteUnmatchedFrame,
+                partialTail = result.partialTail,
+                writeCompleted = true
+            )
 
         } catch (_: IOException) {
-            return DumlRawExchange(null, null)
+            return DumlRawExchange(
+                matchedFrame = null,
+                validatedPayload = null,
+                lastCompleteUnmatchedFrame = null,
+                partialTail = null,
+                writeCompleted = writeCompleted,
+                failureStage = failureStage
+            )
         } finally {
             try { socket?.close() } catch (_: IOException) {}
         }
@@ -402,60 +417,90 @@ class DumlTransport {
             socket = Socket()
             socket.connect(InetSocketAddress(HOST, port), CONNECT_TIMEOUT_MS)
             socket.tcpNoDelay = true
-            val input = socket.getInputStream()
             val deadlineNanos = System.nanoTime() + durationMs * 1_000_000L
-
-            while (frames.size < maxFrames) {
-                val remainingNanos = deadlineNanos - System.nanoTime()
-                if (remainingNanos <= 0) break
-                val timeoutMs = ((remainingNanos + 999_999L) / 1_000_000L)
-                    .coerceAtMost(250L)
-                    .coerceAtLeast(1L)
-                    .toInt()
-                // Resynchronize byte-by-byte until a DUML magic byte appears.
-                val magic = readBytesUntilDeadline(
-                    input = input,
-                    count = 1,
+            frames.addAll(
+                readDumlStream(
+                    input = socket.getInputStream(),
                     socket = socket,
                     deadlineNanos = deadlineNanos,
-                    maxReadTimeoutMs = timeoutMs
-                ) ?: continue
-                if (magic[0] != 0x55.toByte()) continue
-
-                val headerTail = readBytesUntilDeadline(
-                    input = input,
-                    count = 10,
-                    socket = socket,
-                    deadlineNanos = deadlineNanos,
-                    maxReadTimeoutMs = 250
-                ) ?: break
-                if (headerTail.size != 10) break
-                val header = magic + headerTail
-                val totalLength = (header[1].toInt() and 0xFF) or
-                    ((header[2].toInt() and 0x03) shl 8)
-                if (totalLength < 13 || totalLength > 1023) continue
-                if (DumlBuilder.crc8(header, 0, 3) != (header[3].toInt() and 0xFF)) continue
-
-                val body = readBytesUntilDeadline(
-                    input = input,
-                    count = totalLength - 11,
-                    socket = socket,
-                    deadlineNanos = deadlineNanos,
-                    maxReadTimeoutMs = 250
-                ) ?: break
-                if (body.size != totalLength - 11) break
-                val frame = header + body
-                val expectedCrc = DumlBuilder.crc16(frame, 0, totalLength - 2)
-                val actualCrc = (frame[totalLength - 2].toInt() and 0xFF) or
-                    ((frame[totalLength - 1].toInt() and 0xFF) shl 8)
-                if (expectedCrc == actualCrc) frames.add(frame)
-            }
+                    maxFrames = maxFrames,
+                    matcher = null
+                ).completeFrames
+            )
         } catch (_: IOException) {
             // Return any complete frames already captured before disconnect.
         } finally {
             try { socket?.close() } catch (_: IOException) {}
         }
         return frames
+    }
+
+    /**
+     * Sends exact caller-provided bytes and returns the bounded raw byte stream
+     * received on the same localhost socket. No DUML/wrapper assumptions are
+     * made, allowing future protocol experiments without another APK rebuild.
+     */
+    fun exchangeWire(
+        wire: ByteArray,
+        durationMs: Int = 3_000,
+        maxBytes: Int = 16_384,
+        port: Int = PORT,
+        onWriteFlushed: () -> Unit = {}
+    ): WireExchangeResult {
+        require(wire.isNotEmpty() && wire.size <= 4_096) { "invalid_wire_size" }
+        require(durationMs in 100..10_000) { "invalid_duration_ms" }
+        require(maxBytes in 1..65_536) { "invalid_max_bytes" }
+
+        var socket: Socket? = null
+        val output = ByteArrayOutputStream(minOf(maxBytes, 16_384))
+        var failureStage = "connect"
+        var writeCompleted = false
+        try {
+            socket = Socket()
+            socket.connect(InetSocketAddress(HOST, port), CONNECT_TIMEOUT_MS)
+            socket.tcpNoDelay = true
+            failureStage = "write"
+            socket.getOutputStream().apply {
+                write(wire)
+                flush()
+            }
+            writeCompleted = true
+            failureStage = "read"
+            onWriteFlushed()
+
+            val input = socket.getInputStream()
+            val buffer = ByteArray(minOf(4_096, maxBytes))
+            val deadlineNanos = System.nanoTime() + durationMs * 1_000_000L
+            while (output.size() < maxBytes) {
+                val remainingNanos = deadlineNanos - System.nanoTime()
+                if (remainingNanos <= 0) break
+                socket.soTimeout = ((remainingNanos + 999_999L) / 1_000_000L)
+                    .coerceAtMost(250L)
+                    .coerceAtLeast(1L)
+                    .toInt()
+                val count = try {
+                    input.read(buffer, 0, minOf(buffer.size, maxBytes - output.size()))
+                } catch (_: SocketTimeoutException) {
+                    continue
+                } catch (_: IOException) {
+                    break
+                }
+                if (count <= 0) break
+                output.write(buffer, 0, count)
+            }
+        } catch (_: IOException) {
+            return WireExchangeResult(
+                writeCompleted = writeCompleted,
+                responseBytes = output.toByteArray(),
+                failureStage = failureStage
+            )
+        } finally {
+            try { socket?.close() } catch (_: IOException) {}
+        }
+        return WireExchangeResult(
+            writeCompleted = true,
+            responseBytes = output.toByteArray()
+        )
     }
 
     /**
@@ -581,7 +626,12 @@ class DumlTransport {
      * profiles intentionally request no ACK, so success means that connect,
      * write and flush completed; it does not prove the aircraft changed state.
      */
-    private fun sendOneFrame(frame: ByteArray, readWindowMs: Int, port: Int = PORT): Boolean {
+    private fun sendOneFrame(
+        frame: ByteArray,
+        readWindowMs: Int,
+        port: Int = PORT,
+        onWriteFlushed: () -> Unit = {}
+    ): Boolean {
         var socket: Socket? = null
         try {
             socket = Socket()
@@ -593,6 +643,7 @@ class DumlTransport {
             socket.soTimeout = maxOf(readWindowMs.coerceAtMost(120), 20)
 
             socket.getOutputStream().apply { write(frame); flush() }
+            onWriteFlushed()
 
             // Best-effort ACK drain. A timeout is not a write failure because
             // NO_ACK_NEEDED profiles legitimately return no response.
@@ -654,48 +705,127 @@ class DumlTransport {
         return allSuccess
     }
 
-    private fun readBytes(input: java.io.InputStream, count: Int): ByteArray? {
-        val out = ByteArray(count)
-        var read = 0
-        while (read < count) {
-            val n = try {
-                input.read(out, read, count - read)
-            } catch (_: IOException) {
-                return if (read > 0) out.copyOf(read) else null
-            }
-            if (n <= 0) return if (read > 0) out.copyOf(read) else null
-            read += n
-        }
-        return out
-    }
-
-    /** Reads exactly [count] bytes without allowing trickle traffic to extend a global deadline. */
-    private fun readBytesUntilDeadline(
+    /**
+     * Incrementally parses structurally valid DUML frames until a match, EOF,
+     * frame limit, or the shared deadline. Short socket timeouts only wake the
+     * loop to re-check that deadline; they never terminate parsing by themselves.
+     */
+    private fun readDumlStream(
         input: java.io.InputStream,
-        count: Int,
         socket: Socket,
         deadlineNanos: Long,
-        maxReadTimeoutMs: Int = Int.MAX_VALUE
-    ): ByteArray? {
-        val out = ByteArray(count)
-        var read = 0
-        while (read < count) {
+        maxFrames: Int,
+        matcher: ((ByteArray) -> ByteArray?)?
+    ): DumlStreamResult {
+        val completeFrames = ArrayList<ByteArray>(minOf(maxFrames, 64))
+        var pending = ByteArray(0)
+        var partialPrefix = ByteArray(0)
+        var lastCompleteUnmatchedFrame: ByteArray? = null
+
+        fun appendBounded(existing: ByteArray, bytes: ByteArray, length: Int = bytes.size): ByteArray {
+            if (length <= 0) return existing
+            val combined = ByteArray(existing.size + length)
+            existing.copyInto(combined)
+            bytes.copyInto(combined, existing.size, 0, length)
+            return if (combined.size <= PARTIAL_TAIL_LIMIT) {
+                combined
+            } else {
+                combined.copyOfRange(combined.size - PARTIAL_TAIL_LIMIT, combined.size)
+            }
+        }
+
+        fun partialTail(): ByteArray? {
+            val combined = appendBounded(partialPrefix, pending)
+            return combined.takeIf { it.isNotEmpty() }
+        }
+
+        fun result(
+            matchedFrame: ByteArray? = null,
+            matchedPayload: ByteArray? = null
+        ): DumlStreamResult = DumlStreamResult(
+            completeFrames = completeFrames,
+            matchedFrame = matchedFrame,
+            matchedPayload = matchedPayload,
+            lastCompleteUnmatchedFrame = lastCompleteUnmatchedFrame,
+            partialTail = if (matchedFrame == null) partialTail() else null
+        )
+
+        fun consumePending(): DumlStreamResult? {
+            while (pending.isNotEmpty()) {
+                val magicIndex = pending.indexOfFirst { it == 0x55.toByte() }
+                if (magicIndex < 0) {
+                    partialPrefix = appendBounded(partialPrefix, pending)
+                    pending = ByteArray(0)
+                    return null
+                }
+                if (magicIndex > 0) {
+                    partialPrefix = appendBounded(partialPrefix, pending, magicIndex)
+                    pending = pending.copyOfRange(magicIndex, pending.size)
+                }
+                if (pending.size < 4) return null
+
+                val totalLength = (pending[1].toInt() and 0xFF) or
+                    ((pending[2].toInt() and 0x03) shl 8)
+                val headerValid = totalLength in 13..1023 &&
+                    DumlBuilder.crc8(pending, 0, 3) == (pending[3].toInt() and 0xFF)
+                if (!headerValid) {
+                    // Shift by one byte only. The remaining candidate may already
+                    // contain the magic byte of the next real frame.
+                    partialPrefix = appendBounded(partialPrefix, pending, 1)
+                    pending = pending.copyOfRange(1, pending.size)
+                    continue
+                }
+                if (pending.size < totalLength) return null
+
+                val candidate = pending.copyOfRange(0, totalLength)
+                val expectedCrc = DumlBuilder.crc16(candidate, 0, totalLength - 2)
+                val actualCrc = (candidate[totalLength - 2].toInt() and 0xFF) or
+                    ((candidate[totalLength - 1].toInt() and 0xFF) shl 8)
+                if (expectedCrc != actualCrc) {
+                    partialPrefix = appendBounded(partialPrefix, pending, 1)
+                    pending = pending.copyOfRange(1, pending.size)
+                    continue
+                }
+
+                pending = pending.copyOfRange(totalLength, pending.size)
+                partialPrefix = ByteArray(0)
+                if (matcher == null) {
+                    completeFrames.add(candidate)
+                    if (completeFrames.size >= maxFrames) return result()
+                } else {
+                    val payload = matcher(candidate)
+                    if (payload != null) return result(candidate, payload)
+                    lastCompleteUnmatchedFrame = candidate
+                }
+            }
+            return null
+        }
+
+        val readBuffer = ByteArray(STREAM_READ_BUFFER_SIZE)
+        while (true) {
+            consumePending()?.let { return it }
             val remainingNanos = deadlineNanos - System.nanoTime()
-            if (remainingNanos <= 0) return if (read > 0) out.copyOf(read) else null
-            val remainingMs = ((remainingNanos + 999_999L) / 1_000_000L)
-                .coerceAtMost(maxReadTimeoutMs.toLong())
+            if (remainingNanos <= 0) return result()
+            socket.soTimeout = ((remainingNanos + 999_999L) / 1_000_000L)
+                .coerceAtMost(STREAM_READ_TIMEOUT_MS.toLong())
                 .coerceAtLeast(1L)
                 .toInt()
-            socket.soTimeout = remainingMs
-            val n = try {
-                input.read(out, read, count - read)
+            val count = try {
+                input.read(readBuffer)
+            } catch (_: SocketTimeoutException) {
+                continue
             } catch (_: IOException) {
-                return if (read > 0) out.copyOf(read) else null
+                return result()
             }
-            if (n <= 0) return if (read > 0) out.copyOf(read) else null
-            read += n
+            // EOF (or a non-progressing stream) is terminal, preventing the
+            // passive capture loop from spinning until the deadline.
+            if (count <= 0) return result()
+
+            val combined = ByteArray(pending.size + count)
+            pending.copyInto(combined)
+            readBuffer.copyInto(combined, pending.size, 0, count)
+            pending = combined
         }
-        return out
     }
 
     companion object {
@@ -711,6 +841,9 @@ class DumlTransport {
 
         /** TCP connect timeout for all socket opens to the DUML proxy. */
         private const val CONNECT_TIMEOUT_MS = 2000
+        private const val STREAM_READ_TIMEOUT_MS = 250
+        private const val STREAM_READ_BUFFER_SIZE = 4096
+        private const val PARTIAL_TAIL_LIMIT = 4096
     }
 
     /** Reused read buffer for ACK reads — avoids a per-frame allocation. */

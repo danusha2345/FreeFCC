@@ -9,6 +9,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.net.InetAddress
 import java.net.ServerSocket
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 class DumlTransportTest {
 
@@ -111,7 +114,10 @@ class DumlTransportTest {
         serverThread.join(5_000)
         assertNotNull(exchange.responseFrame)
         assertArrayEquals(response, exchange.responseFrame)
+        assertArrayEquals(response, exchange.matchedFrame)
         assertArrayEquals(expectedPayload, exchange.validatedPayload)
+        assertNull(exchange.lastCompleteUnmatchedFrame)
+        assertNull(exchange.partialTail)
     }
 
     @Test
@@ -149,7 +155,10 @@ class DumlTransportTest {
 
         serverThread.join(5_000)
         assertArrayEquals(expectedResponse, exchange.responseFrame)
+        assertArrayEquals(expectedResponse, exchange.matchedFrame)
         assertArrayEquals(expectedPayload, exchange.validatedPayload)
+        assertArrayEquals(unrelatedResponse, exchange.lastCompleteUnmatchedFrame)
+        assertNull(exchange.partialTail)
     }
 
     @Test
@@ -226,6 +235,196 @@ class DumlTransportTest {
     }
 
     @Test
+    fun passiveCaptureReturnsPromptlyOnEof() {
+        val server = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
+        val serverThread = Thread {
+            server.use { listener ->
+                listener.accept().use { /* close without sending */ }
+            }
+        }
+        serverThread.start()
+
+        val startedAt = System.nanoTime()
+        val frames = DumlTransport().captureFrames(
+            durationMs = 1_000,
+            maxFrames = 1,
+            port = server.localPort
+        )
+        val elapsedMs = (System.nanoTime() - startedAt) / 1_000_000L
+
+        serverThread.join(2_000)
+        assertTrue("capture spun after EOF for ${elapsedMs}ms", elapsedMs < 500)
+        assertTrue(frames.isEmpty())
+    }
+
+    @Test
+    fun passiveCaptureWaitsPastLocalReadTimeoutUntilGlobalDeadline() {
+        val request = DumlBuilder().buildFrame(
+            DumlFrame(0x2A, 0x40, 0x06, 0xAE, 0x03, ByteArray(0))
+        )
+        val response = buildResponse(request, byteArrayOf(0x04))
+        val server = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
+        val serverThread = Thread {
+            server.use { listener ->
+                listener.accept().use { socket ->
+                    socket.getOutputStream().apply {
+                        write(0x55)
+                        flush()
+                    }
+                    Thread.sleep(350)
+                    socket.getOutputStream().apply {
+                        write(response)
+                        flush()
+                    }
+                }
+            }
+        }
+        serverThread.start()
+
+        val frames = DumlTransport().captureFrames(
+            durationMs = 1_000,
+            maxFrames = 1,
+            port = server.localPort
+        )
+
+        serverThread.join(2_000)
+        assertEquals(1, frames.size)
+        assertArrayEquals(response, frames.single())
+    }
+
+    @Test
+    fun passiveCaptureResynchronizesOneByteAfterFalseMagic() {
+        val request = DumlBuilder().buildFrame(
+            DumlFrame(0x2A, 0x40, 0x03, 0xF8, 0x03, ByteArray(0))
+        )
+        val response = buildResponse(request, byteArrayOf(0x01))
+        val server = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
+        val serverThread = Thread {
+            server.use { listener ->
+                listener.accept().use { socket ->
+                    socket.getOutputStream().apply {
+                        write(byteArrayOf(0x55, 0x00))
+                        write(response)
+                        flush()
+                    }
+                }
+            }
+        }
+        serverThread.start()
+
+        val frames = DumlTransport().captureFrames(
+            durationMs = 1_000,
+            maxFrames = 1,
+            port = server.localPort
+        )
+
+        serverThread.join(2_000)
+        assertEquals(1, frames.size)
+        assertArrayEquals(response, frames.single())
+    }
+
+    @Test
+    fun wireExchangeReturnsExactUnparsedBytesWithinLimit() {
+        val request = byteArrayOf(0x55, 0xCC.toByte(), 0x30, 0x75)
+        val response = byteArrayOf(0x55, 0xCC.toByte(), 0x30, 0x75, 0x01, 0x02, 0x03)
+        val server = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
+        val serverError = AtomicReference<Throwable>()
+        val serverThread = Thread {
+            try {
+                server.use {
+                    it.accept().use { socket ->
+                        val received = ByteArray(request.size)
+                        socket.getInputStream().read(received)
+                        assertArrayEquals(request, received)
+                        socket.getOutputStream().apply {
+                            write(response)
+                            flush()
+                        }
+                    }
+                }
+            } catch (t: Throwable) {
+                serverError.set(t)
+            }
+        }
+        serverThread.start()
+
+        val exchange = DumlTransport().exchangeWire(
+            wire = request,
+            durationMs = 500,
+            maxBytes = 128,
+            port = server.localPort
+        )
+
+        serverThread.join(5_000)
+        serverError.get()?.let { throw AssertionError("server thread failed", it) }
+        assertTrue(exchange.writeCompleted)
+        assertNull(exchange.failureStage)
+        assertArrayEquals(response, exchange.responseBytes)
+    }
+
+    @Test
+    fun rawExchangeReleasesWriteLeaseAfterFlushBeforeResponse() {
+        val request = DumlBuilder().buildFrame(
+            DumlFrame(0x2A, 0x40, 0x03, 0xF8, 0x03, ByteArray(0))
+        )
+        val response = buildResponse(request, byteArrayOf(0x01))
+        val server = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
+        val requestReceived = CountDownLatch(1)
+        val writeReleased = CountDownLatch(1)
+        val releaseResponse = CountDownLatch(1)
+        val exchangeResult = AtomicReference<DumlRawExchange>()
+        val exchangeError = AtomicReference<Throwable>()
+        val serverThread = Thread {
+            server.use { listener ->
+                listener.accept().use { socket ->
+                    socket.getInputStream().read(ByteArray(request.size))
+                    requestReceived.countDown()
+                    releaseResponse.await(2, TimeUnit.SECONDS)
+                    socket.getOutputStream().apply {
+                        write(response)
+                        flush()
+                    }
+                }
+            }
+        }
+        serverThread.start()
+
+        val originalLease = HardwareLock.tryBegin()
+        assertNotNull(originalLease)
+        val clientThread = Thread {
+            try {
+                exchangeResult.set(
+                    DumlTransport().sendAndReceiveRaw(
+                        frame = request,
+                        readWindowMs = 1_000,
+                        port = server.localPort,
+                        autoDetectPort = false,
+                        onWriteFlushed = {
+                            originalLease!!.close()
+                            writeReleased.countDown()
+                        }
+                    )
+                )
+            } catch (t: Throwable) {
+                exchangeError.set(t)
+            }
+        }
+        clientThread.start()
+
+        assertTrue(requestReceived.await(1, TimeUnit.SECONDS))
+        assertTrue(writeReleased.await(1, TimeUnit.SECONDS))
+        val keepaliveLease = HardwareLock.tryBegin()
+        assertNotNull("write lease remained held during passive response wait", keepaliveLease)
+        keepaliveLease!!.close()
+        releaseResponse.countDown()
+
+        clientThread.join(2_000)
+        serverThread.join(2_000)
+        exchangeError.get()?.let { throw AssertionError("exchange thread failed", it) }
+        assertArrayEquals(response, exchangeResult.get().matchedFrame)
+    }
+
+    @Test
     fun rawExchangeRetainsPartialResponseOnBodyTimeout() {
         val request = DumlBuilder().buildFrame(
             DumlFrame(0x2A, 0x40, 0x03, 0xF8, 0x03, byteArrayOf(0xA2.toByte(), 0x59, 0xCE.toByte(), 0xED.toByte()))
@@ -256,7 +455,10 @@ class DumlTransportTest {
 
         serverThread.join(5_000)
         assertArrayEquals(response.copyOf(partialSize), exchange.responseFrame)
+        assertNull(exchange.matchedFrame)
         assertNull(exchange.validatedPayload)
+        assertNull(exchange.lastCompleteUnmatchedFrame)
+        assertArrayEquals(response.copyOf(partialSize), exchange.partialTail)
     }
 
     @Test
@@ -290,7 +492,52 @@ class DumlTransportTest {
 
         serverThread.join(5_000)
         assertArrayEquals(response.copyOf(partialSize), exchange.responseFrame)
+        assertNull(exchange.matchedFrame)
         assertNull(exchange.validatedPayload)
+        assertNull(exchange.lastCompleteUnmatchedFrame)
+        assertArrayEquals(response.copyOf(partialSize), exchange.partialTail)
+    }
+
+    @Test
+    fun rawExchangeKeepsLastUnmatchedFrameSeparateFromPartialTail() {
+        val request = DumlBuilder().buildFrame(
+            DumlFrame(0x2A, 0x40, 0x03, 0xF8, 0x03, ByteArray(0))
+        )
+        val unrelatedRequest = DumlBuilder().buildFrame(
+            DumlFrame(0x2A, 0x40, 0x06, 0xAE, 0x03, ByteArray(0))
+        )
+        val unrelatedResponse = buildResponse(unrelatedRequest, byteArrayOf(0x04))
+        val matchingResponse = buildResponse(request, byteArrayOf(0x01))
+        val partialSize = 8
+        val server = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
+        val serverThread = Thread {
+            server.use { listener ->
+                listener.accept().use { socket ->
+                    socket.getInputStream().read(ByteArray(1024))
+                    socket.getOutputStream().apply {
+                        write(unrelatedResponse)
+                        write(matchingResponse, 0, partialSize)
+                        flush()
+                    }
+                    Thread.sleep(300)
+                }
+            }
+        }
+        serverThread.start()
+
+        val exchange = DumlTransport().sendAndReceiveRaw(
+            frame = request,
+            readWindowMs = 100,
+            port = server.localPort,
+            autoDetectPort = false
+        )
+
+        serverThread.join(2_000)
+        assertNull(exchange.matchedFrame)
+        assertNull(exchange.validatedPayload)
+        assertArrayEquals(unrelatedResponse, exchange.lastCompleteUnmatchedFrame)
+        assertArrayEquals(matchingResponse.copyOf(partialSize), exchange.partialTail)
+        assertArrayEquals(unrelatedResponse, exchange.responseFrame)
     }
 
     private fun buildResponse(request: ByteArray, payload: ByteArray): ByteArray {

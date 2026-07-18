@@ -8,7 +8,9 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -31,7 +33,9 @@ data class AppState(
     val status: String = "idle",
     val message: String = "",
     val isConnected: Boolean = false,
+    // Process-local proof of a completed FCC profile write, never RF readback.
     val isFccEnabled: Boolean = false,
+    val fccLastWriteAtMs: Long? = null,
     val is4gBusy: Boolean = false,
     val fourGMessage: String = "",
     val isBusy: Boolean = false,
@@ -66,6 +70,20 @@ internal data class FourGIdentity(
     val modelCode: String?
 )
 
+private class LanWriteLease(
+    private val hardwareLease: HardwareLock.Lease,
+    private val releaseLedGate: () -> Unit
+) : AutoCloseable {
+    private val closed = AtomicBoolean(false)
+
+    override fun close() {
+        if (closed.compareAndSet(false, true)) {
+            hardwareLease.close()
+            releaseLedGate()
+        }
+    }
+}
+
 /**
  * Manages all app state and business logic.
  *
@@ -79,11 +97,13 @@ internal data class FourGIdentity(
 class FccViewModel(private val app: Application) : AndroidViewModel(app) {
 
     companion object {
-        const val APP_VERSION = "1.5.12"
+        const val APP_VERSION = "1.5.13"
 
         private const val MAX_LOG_ENTRIES = 200
         private val processLogLock = Any()
         private val processLogs = ArrayDeque<String>()
+        private val lanDiagnosticBusy = AtomicBoolean(false)
+        private val ledOperationBusy = AtomicBoolean(false)
         @Volatile private var activeLanController: FccViewModel? = null
         private val networkLogServer = NetworkLogServer(
             logSnapshot = {
@@ -122,7 +142,8 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
             "launch_dji_fly",
             "duml_send",
             "duml_request",
-            "duml_capture"
+            "duml_capture",
+            "wire_exchange"
         )
 
         private val FULL_SERIAL_PATTERN = Regex("^1581[0-9A-Z]{12,18}$")
@@ -182,7 +203,6 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
     private val prefs = app.getSharedPreferences("freefcc", Context.MODE_PRIVATE)
     private var initialized = false
     private var autoFccJob: Job? = null
-    private val ledOperationBusy = AtomicBoolean(false)
     @Volatile private var aircraftIdentityVerified = false
 
     init {
@@ -191,6 +211,26 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
         // ViewModel instance — the collector must live here, not in init().
         viewModelScope.launch {
             HardwareLock.busy.collect { busy -> update { copy(isHardwareBusy = busy) } }
+        }
+        viewModelScope.launch {
+            FccRuntime.tracker.state.collect { runtime ->
+                val hasWriteEvidence = runtime.lastSuccessfulWriteAtMs != null
+                val keepaliveActive = runtime.keepaliveStatus == KeepaliveRuntimeStatus.STARTING ||
+                    runtime.keepaliveStatus == KeepaliveRuntimeStatus.RUNNING
+                update {
+                    copy(
+                        isKeepaliveRunning = keepaliveActive,
+                        isFccEnabled = hasWriteEvidence,
+                        fccLastWriteAtMs = runtime.lastSuccessfulWriteAtMs,
+                        status = when {
+                            status == "applying" || status == "restoring" -> status
+                            hasWriteEvidence && isConnected -> "fcc_written"
+                            !hasWriteEvidence && status == "fcc_written" && isConnected -> "connected"
+                            else -> status
+                        }
+                    )
+                }
+            }
         }
         // Restore the cached aircraft serial from a previous session so the
         // user does not have to re-probe before 4G if the drone is the same.
@@ -203,23 +243,37 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
     /** Claims the shared hardware lock for one operation, or null if it is busy. */
     private fun beginHardwareOp(): HardwareLock.Lease? = HardwareLock.tryBegin()
 
+    /** Serializes LAN probes and holds hardware gates only through socket flush. */
+    private fun beginLanWrite(): LanWriteLease? {
+        val hardwareLease = beginHardwareOp() ?: return null
+        if (!ledOperationBusy.compareAndSet(false, true)) {
+            hardwareLease.close()
+            return null
+        }
+        return LanWriteLease(hardwareLease) { ledOperationBusy.set(false) }
+    }
+
     fun init() {
         activeLanController = this
         if (initialized) return
         initialized = true
         val model = try { Build.DEVICE } catch (_: Exception) { "unknown" }
         val autoEnabled = prefs.getBoolean("auto_fcc", false)
+        // v1.5.12 and earlier persisted a write as if it were current FCC
+        // state. Ignore and remove that stale cross-process evidence.
+        prefs.edit().remove("fcc_sequence_written").apply()
         // Sync the keepalive toggle with the persistent flag so the UI is
         // correct after a process restart (e.g. low-memory kill + sticky restart).
         val keepaliveRequested = FccKeepaliveService.isRunningFlagSet(app)
-        val fccSequenceWritten = FccKeepaliveService.wasFccSequenceWritten(app)
+        val runtime = FccRuntime.tracker.state.value
         update {
             copy(
                 controllerModel = model,
                 status = "disconnected",
                 autoFcc = autoEnabled,
                 isKeepaliveRunning = keepaliveRequested,
-                isFccEnabled = fccSequenceWritten
+                isFccEnabled = runtime.lastSuccessfulWriteAtMs != null,
+                fccLastWriteAtMs = runtime.lastSuccessfulWriteAtMs
             )
         }
         log("FreeFCC v$APP_VERSION started on $model")
@@ -232,10 +286,9 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
             try {
                 FccKeepaliveService.start(app)
                 log("FCC keepalive requested state restored")
-                refreshFccWrittenStateAfterKeepaliveStart()
             } catch (e: Exception) {
-                FccKeepaliveService.clearRunRequest(app)
-                update { copy(isKeepaliveRunning = false) }
+                // Keep an existing persistent user request so a later
+                // foreground retry can restore the service.
                 log("FCC keepalive restore failed: ${e.message}")
             }
         }
@@ -265,12 +318,14 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
             if (transport.connect()) {
                 val detectedPort = transport.getDetectedPort()
                 val keepaliveRequested = _state.value.isKeepaliveRunning
-                val fccSequenceWritten = FccKeepaliveService.wasFccSequenceWritten(app)
+                val lastWriteAtMs = FccRuntime.tracker.state.value.lastSuccessfulWriteAtMs
+                val fccSequenceWritten = lastWriteAtMs != null
                 update {
                     copy(
-                        status = if (fccSequenceWritten) "fcc_enabled" else "connected",
+                        status = if (fccSequenceWritten) "fcc_written" else "connected",
                         isConnected = true,
                         isFccEnabled = fccSequenceWritten,
+                        fccLastWriteAtMs = lastWriteAtMs,
                         message = if (fccSequenceWritten && keepaliveRequested) {
                             "FCC sequence written; keepalive requested — verify in DJI Fly."
                         } else if (fccSequenceWritten) {
@@ -360,6 +415,7 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
             log("Auto-FCC skipped — another hardware operation is already running")
             return
         }
+        var keepaliveStartedByAuto = false
         autoFccJob = runOnIO {
             try {
                 // Wait a moment for the UI to render
@@ -373,6 +429,7 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                     return@runOnIO
                 }
 
+                FccRuntime.tracker.beginHardwareSession()
                 log("Auto-FCC: controller connected")
                 val detectedPort = transport.getDetectedPort()
                 if (detectedPort > 0) {
@@ -411,10 +468,10 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                 ) { progress -> update { copy(busyProgress = progress) } }
 
                 if (success) {
-                    FccKeepaliveService.setFccSequenceWritten(app, true)
+                    FccRuntime.tracker.recordWrite(true)
                     update {
                         copy(
-                            status = "fcc_enabled",
+                            status = "fcc_written",
                             message = "FCC sequence written. Starting keepalive...",
                             isFccEnabled = true,
                             isBusy = false,
@@ -426,8 +483,9 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
 
                     // Auto-start keepalive
                     delay(500)
-                    update { copy(isKeepaliveRunning = true) }
-                    FccKeepaliveService.start(app)
+                    currentCoroutineContext().ensureActive()
+                    keepaliveStartedByAuto = FccKeepaliveService.start(app)
+                    currentCoroutineContext().ensureActive()
                     log("Auto-FCC: keepalive started (re-applying every 2s)")
 
                     // Keep the intended Auto-FCC behavior, but make this delay
@@ -449,6 +507,11 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                     log("Auto-FCC: apply failed — try manually")
                 }
             } catch (_: CancellationException) {
+                if (keepaliveStartedByAuto) {
+                    FccKeepaliveService.stop(app)
+                    keepaliveStartedByAuto = false
+                    log("Auto-FCC: stopped the keepalive started by the cancelled flow")
+                }
                 log("Auto-FCC: cancelled by user")
                 update {
                     copy(
@@ -486,6 +549,7 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
         runOnIO {
             try {
                 if (transport.connect()) {
+                    FccRuntime.tracker.beginHardwareSession()
                     log("Controller connected")
                     val detectedPort = transport.getDetectedPort()
                     if (detectedPort > 0) {
@@ -554,10 +618,10 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                 ) { progress -> update { copy(busyProgress = progress) } }
 
                 if (success) {
-                    FccKeepaliveService.setFccSequenceWritten(app, true)
+                    FccRuntime.tracker.recordWrite(true)
                     update {
                         copy(
-                            status = "fcc_enabled",
+                            status = "fcc_written",
                             message = "FCC sequence written — verify the region in DJI Fly",
                             isFccEnabled = true,
                             isBusy = false,
@@ -567,6 +631,7 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                     }
                     log("FCC apply: all ${profile.frames.size * profile.rounds} frame writes completed; verify in DJI Fly")
                 } else {
+                    FccRuntime.tracker.recordWrite(false)
                     update {
                         copy(
                             status = "connected",
@@ -596,7 +661,7 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
         }
         // Stop keepalive first — otherwise it re-applies FCC 2 seconds after
         // we restore CE, undoing the user's intent.
-        if (_state.value.isKeepaliveRunning) {
+        if (_state.value.isKeepaliveRunning || FccKeepaliveService.isRunningFlagSet(app)) {
             stopKeepalive()
         }
         update { copy(status = "restoring", isBusy = true, busyProgress = 0f, message = "Restoring CE mode...") }
@@ -612,7 +677,7 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                 )
 
                 if (success) {
-                    FccKeepaliveService.setFccSequenceWritten(app, false)
+                    FccRuntime.tracker.clearWriteEvidence()
                     update {
                         copy(
                             status = "connected",
@@ -649,14 +714,10 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
             log("Keepalive already running")
             return
         }
-        update { copy(isKeepaliveRunning = true) }
         try {
             FccKeepaliveService.start(app)
-            refreshFccWrittenStateAfterKeepaliveStart()
             log("Started FCC keepalive — re-applying every 2s to prevent CE reset")
         } catch (e: Exception) {
-            FccKeepaliveService.clearRunRequest(app)
-            update { copy(isKeepaliveRunning = false) }
             log("Could not start FCC keepalive: ${e.message}")
         }
     }
@@ -664,28 +725,7 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
     /** Stops the keepalive foreground service. */
     fun stopKeepalive() {
         FccKeepaliveService.stop(app)
-        update { copy(isKeepaliveRunning = false) }
         log("FCC keepalive stopped")
-    }
-
-    /** Refreshes UI only after the service records an actually completed write. */
-    private fun refreshFccWrittenStateAfterKeepaliveStart() {
-        runOnIO {
-            delay(750)
-            if (FccKeepaliveService.wasFccSequenceWritten(app)) {
-                update {
-                    copy(
-                        isFccEnabled = true,
-                        status = if (isConnected) "fcc_enabled" else status,
-                        message = if (isConnected) {
-                            "FCC sequence written; keepalive requested — verify in DJI Fly."
-                        } else {
-                            message
-                        }
-                    )
-                }
-            }
-        }
     }
 
     // --- Launch DJI Fly ---
@@ -1232,6 +1272,7 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private fun lanStatusJson(): String {
         val current = _state.value
+        val runtime = FccRuntime.tracker.state.value
         return LanJson.objectOf(
             "ok" to true,
             "app_version" to APP_VERSION,
@@ -1239,9 +1280,17 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
             "status" to current.status,
             "message" to current.message,
             "connected" to current.isConnected,
-            "fcc_enabled" to current.isFccEnabled,
+            // The proxy exposes no physical RF-region readback. Keep the old
+            // field present but unknown, and publish the actual evidence under
+            // an explicit name.
+            "fcc_enabled" to null,
+            "fcc_sequence_written" to current.isFccEnabled,
+            "fcc_write_state" to if (current.isFccEnabled) "written_current_process" else "unknown",
+            "fcc_last_write_at_ms" to current.fccLastWriteAtMs,
             "auto_fcc" to current.autoFcc,
             "keepalive_running" to current.isKeepaliveRunning,
+            "keepalive_status" to runtime.keepaliveStatus.name.lowercase(Locale.US),
+            "keepalive_requested" to FccKeepaliveService.isRunningFlagSet(app),
             "hardware_busy" to current.isHardwareBusy,
             "led_busy" to current.isLedBusy,
             "led_status" to current.ledStatus,
@@ -1275,7 +1324,8 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                         "timeout_ms (duml_request)",
                         "wrapper=true|false (duml_send only)",
                         "duration_ms=100..10000 (duml_capture)",
-                        "max_frames=1..128 (duml_capture)"
+                        "max_frames=1..128 (duml_capture)",
+                        "wire_hex, duration_ms, max_bytes (wire_exchange)"
                     )
                 )
             )
@@ -1315,6 +1365,7 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                 "duml_send" -> handleLanDuml(params, expectResponse = false)
                 "duml_request" -> handleLanDuml(params, expectResponse = true)
                 "duml_capture" -> handleLanDumlCapture(params)
+                "wire_exchange" -> handleLanWireExchange(params)
                 else -> lanError(400, "unknown_command")
             }
         } catch (e: IllegalArgumentException) {
@@ -1378,13 +1429,14 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
         )
         val wireRequest = if (wrapper) Profiles.wrapFrame(request) else request
         val requestHex = LanCommandCodec.bytesToHex(request)
-        val usesLedPort = port == DumlTransport.PORT_LED
-        val hardwareLease = if (usesLedPort) null else beginHardwareOp()
-        if (!usesLedPort && hardwareLease == null) return lanError(409, "hardware_busy")
-        if (usesLedPort && !ledOperationBusy.compareAndSet(false, true)) {
-            return lanError(409, "led_busy")
+        if (!lanDiagnosticBusy.compareAndSet(false, true)) {
+            return lanError(409, "diagnostic_busy")
         }
-        if (usesLedPort) update { copy(isLedBusy = true) }
+        val writeLease = beginLanWrite()
+        if (writeLease == null) {
+            lanDiagnosticBusy.set(false)
+            return lanError(409, "hardware_busy")
+        }
 
         val commandLabel = "%02x:%02x".format(Locale.US, cmdSet, cmdId)
         log(
@@ -1395,7 +1447,12 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
 
         return try {
             if (!expectResponse) {
-                val sent = transport.sendFrame(wireRequest, readWindowMs = timeoutMs, port = port)
+                val sent = transport.sendFrame(
+                    frame = wireRequest,
+                    readWindowMs = timeoutMs,
+                    port = port,
+                    onWriteFlushed = writeLease::close
+                )
                 if (sent) {
                     log("LAN DUML send $commandLabel completed")
                     NetworkApiResponse(
@@ -1418,14 +1475,35 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                     frame = request,
                     readWindowMs = timeoutMs,
                     port = port,
-                    autoDetectPort = false
+                    autoDetectPort = false,
+                    onWriteFlushed = writeLease::close
                 )
                 val elapsedMs = System.currentTimeMillis() - startedAt
                 val responseHex = exchange.responseFrame?.let(LanCommandCodec::bytesToHex)
                 val responsePayload = exchange.validatedPayload
+                val unmatchedHex = exchange.lastCompleteUnmatchedFrame
+                    ?.let(LanCommandCodec::bytesToHex)
+                val partialHex = exchange.partialTail?.let(LanCommandCodec::bytesToHex)
 
                 when {
-                    exchange.responseFrame == null -> {
+                    !exchange.writeCompleted -> {
+                        log("LAN DUML request $commandLabel write failed at ${exchange.failureStage}")
+                        NetworkApiResponse(
+                            502,
+                            LanJson.objectOf(
+                                "ok" to false,
+                                "command" to "duml_request",
+                                "error" to "send_failed",
+                                "failure_stage" to exchange.failureStage,
+                                "request_hex" to requestHex,
+                                "port" to port,
+                                "elapsed_ms" to elapsedMs
+                            )
+                        )
+                    }
+                    exchange.matchedFrame == null &&
+                        exchange.lastCompleteUnmatchedFrame == null &&
+                        exchange.partialTail == null -> {
                         log("LAN DUML request $commandLabel timed out after ${elapsedMs}ms")
                         NetworkApiResponse(
                             504,
@@ -1439,16 +1517,18 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                             )
                         )
                     }
-                    responsePayload == null -> {
-                        log("LAN DUML request $commandLabel returned an invalid response")
+                    exchange.matchedFrame == null || responsePayload == null -> {
+                        log("LAN DUML request $commandLabel returned evidence but no matching response")
                         NetworkApiResponse(
                             502,
                             LanJson.objectOf(
                                 "ok" to false,
                                 "command" to "duml_request",
-                                "error" to "response_validation_failed",
+                                "error" to "no_matching_response",
                                 "request_hex" to requestHex,
                                 "response_hex" to responseHex,
+                                "last_unmatched_hex" to unmatchedHex,
+                                "partial_tail_hex" to partialHex,
                                 "port" to port,
                                 "elapsed_ms" to elapsedMs
                             )
@@ -1465,6 +1545,8 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                                 "request_hex" to requestHex,
                                 "response_hex" to responseHex,
                                 "payload_hex" to payloadHex,
+                                "last_unmatched_hex" to unmatchedHex,
+                                "partial_tail_hex" to partialHex,
                                 "port" to port,
                                 "elapsed_ms" to elapsedMs
                             )
@@ -1473,11 +1555,8 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                 }
             }
         } finally {
-            hardwareLease?.close()
-            if (usesLedPort) {
-                ledOperationBusy.set(false)
-                update { copy(isLedBusy = false) }
-            }
+            writeLease.close()
+            lanDiagnosticBusy.set(false)
         }
     }
 
@@ -1485,43 +1564,110 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
         val port = LanCommandCodec.optionalPort(params)
         val durationMs = LanCommandCodec.optionalCaptureDuration(params)
         val maxFrames = LanCommandCodec.optionalCaptureMaxFrames(params)
+        if (!lanDiagnosticBusy.compareAndSet(false, true)) {
+            return lanError(409, "diagnostic_busy")
+        }
         log("LAN DUML capture started: port=$port duration=${durationMs}ms max=$maxFrames")
 
-        val frames = transport.captureFrames(
-            durationMs = durationMs,
-            maxFrames = maxFrames,
-            port = port
-        )
-        val decoded = frames.map { frame ->
-            val totalLength = frame.size
-            linkedMapOf<String, Any?>(
-                "hex" to LanCommandCodec.bytesToHex(frame),
-                "length" to totalLength,
-                "sender" to "0x%02x".format(Locale.US, frame[4].toInt() and 0xFF),
-                "dst" to "0x%02x".format(Locale.US, frame[5].toInt() and 0xFF),
-                "seq" to ((frame[6].toInt() and 0xFF) or ((frame[7].toInt() and 0xFF) shl 8)),
-                "cmd_type" to "0x%02x".format(Locale.US, frame[8].toInt() and 0xFF),
-                "cmd_set" to "0x%02x".format(Locale.US, frame[9].toInt() and 0xFF),
-                "cmd_id" to "0x%02x".format(Locale.US, frame[10].toInt() and 0xFF),
-                "payload_hex" to if (totalLength > 13) {
-                    LanCommandCodec.bytesToHex(frame.copyOfRange(11, totalLength - 2))
-                } else {
-                    ""
-                }
+        return try {
+            val frames = transport.captureFrames(
+                durationMs = durationMs,
+                maxFrames = maxFrames,
+                port = port
             )
+            val decoded = frames.map { frame ->
+                val totalLength = frame.size
+                linkedMapOf<String, Any?>(
+                    "hex" to LanCommandCodec.bytesToHex(frame),
+                    "length" to totalLength,
+                    "sender" to "0x%02x".format(Locale.US, frame[4].toInt() and 0xFF),
+                    "dst" to "0x%02x".format(Locale.US, frame[5].toInt() and 0xFF),
+                    "seq" to ((frame[6].toInt() and 0xFF) or ((frame[7].toInt() and 0xFF) shl 8)),
+                    "cmd_type" to "0x%02x".format(Locale.US, frame[8].toInt() and 0xFF),
+                    "cmd_set" to "0x%02x".format(Locale.US, frame[9].toInt() and 0xFF),
+                    "cmd_id" to "0x%02x".format(Locale.US, frame[10].toInt() and 0xFF),
+                    "payload_hex" to if (totalLength > 13) {
+                        LanCommandCodec.bytesToHex(frame.copyOfRange(11, totalLength - 2))
+                    } else {
+                        ""
+                    }
+                )
+            }
+            log("LAN DUML capture completed: ${frames.size} frame(s)")
+            NetworkApiResponse(
+                200,
+                LanJson.objectOf(
+                    "ok" to true,
+                    "command" to "duml_capture",
+                    "port" to port,
+                    "duration_ms" to durationMs,
+                    "captured" to frames.size,
+                    "frames" to decoded
+                )
+            )
+        } finally {
+            lanDiagnosticBusy.set(false)
         }
-        log("LAN DUML capture completed: ${frames.size} frame(s)")
-        return NetworkApiResponse(
-            200,
-            LanJson.objectOf(
-                "ok" to true,
-                "command" to "duml_capture",
-                "port" to port,
-                "duration_ms" to durationMs,
-                "captured" to frames.size,
-                "frames" to decoded
+    }
+
+    private fun handleLanWireExchange(params: Map<String, String>): NetworkApiResponse {
+        val wire = LanCommandCodec.requiredWireHex(params)
+        val port = LanCommandCodec.optionalPort(params)
+        val durationMs = LanCommandCodec.optionalCaptureDuration(params)
+        val maxBytes = LanCommandCodec.optionalMaxBytes(params)
+        if (!lanDiagnosticBusy.compareAndSet(false, true)) {
+            return lanError(409, "diagnostic_busy")
+        }
+        val writeLease = beginLanWrite()
+        if (writeLease == null) {
+            lanDiagnosticBusy.set(false)
+            return lanError(409, "hardware_busy")
+        }
+
+        log("LAN wire exchange started: port=$port tx=${wire.size}B window=${durationMs}ms max=$maxBytes")
+        return try {
+            val startedAt = System.currentTimeMillis()
+            val exchange = transport.exchangeWire(
+                wire = wire,
+                durationMs = durationMs,
+                maxBytes = maxBytes,
+                port = port,
+                onWriteFlushed = writeLease::close
             )
-        )
+            val elapsedMs = System.currentTimeMillis() - startedAt
+            if (!exchange.writeCompleted) {
+                log("LAN wire exchange write failed at ${exchange.failureStage}")
+                NetworkApiResponse(
+                    502,
+                    LanJson.objectOf(
+                        "ok" to false,
+                        "command" to "wire_exchange",
+                        "error" to "send_failed",
+                        "failure_stage" to exchange.failureStage,
+                        "port" to port,
+                        "request_hex" to LanCommandCodec.bytesToHex(wire),
+                        "elapsed_ms" to elapsedMs
+                    )
+                )
+            } else {
+                log("LAN wire exchange completed: rx=${exchange.responseBytes.size}B elapsed=${elapsedMs}ms")
+                NetworkApiResponse(
+                    200,
+                    LanJson.objectOf(
+                        "ok" to true,
+                        "command" to "wire_exchange",
+                        "port" to port,
+                        "request_hex" to LanCommandCodec.bytesToHex(wire),
+                        "response_hex" to LanCommandCodec.bytesToHex(exchange.responseBytes),
+                        "response_bytes" to exchange.responseBytes.size,
+                        "elapsed_ms" to elapsedMs
+                    )
+                )
+            }
+        } finally {
+            writeLease.close()
+            lanDiagnosticBusy.set(false)
+        }
     }
 
     private fun lanError(code: Int, error: String, requestHex: String? = null): NetworkApiResponse =

@@ -74,6 +74,9 @@ internal object LanCommandCodec {
     fun optionalCaptureMaxFrames(params: Map<String, String>): Int =
         params["max_frames"]?.let { parseInt(it, "max_frames", 1, 128) } ?: 64
 
+    fun optionalMaxBytes(params: Map<String, String>): Int =
+        params["max_bytes"]?.let { parseInt(it, "max_bytes", 1, 65_536) } ?: 16_384
+
     fun optionalBoolean(params: Map<String, String>, name: String, default: Boolean = false): Boolean {
         return when (val value = params[name]?.trim()?.lowercase(Locale.US)) {
             null -> default
@@ -84,13 +87,23 @@ internal object LanCommandCodec {
     }
 
     fun optionalHex(params: Map<String, String>, name: String = "payload"): ByteArray {
-        val raw = params[name].orEmpty()
+        return decodeHex(params[name].orEmpty(), name, MAX_PAYLOAD_BYTES)
+    }
+
+    fun requiredWireHex(params: Map<String, String>): ByteArray {
+        val raw = params["wire_hex"] ?: throw IllegalArgumentException("missing_wire_hex")
+        val decoded = decodeHex(raw, "wire", MAX_WIRE_BYTES)
+        require(decoded.isNotEmpty()) { "empty_wire_hex" }
+        return decoded
+    }
+
+    private fun decodeHex(raw: String, name: String, maxBytes: Int): ByteArray {
         val clean = (if (raw.startsWith("0x", ignoreCase = true)) raw.substring(2) else raw)
             .replace(" ", "")
             .replace(":", "")
             .replace("_", "")
         require(clean.length % 2 == 0) { "odd_${name}_hex" }
-        require(clean.length <= MAX_PAYLOAD_BYTES * 2) { "${name}_too_long" }
+        require(clean.length <= maxBytes * 2) { "${name}_too_long" }
         require(clean.all { it.isDigit() || it.lowercaseChar() in 'a'..'f' }) { "invalid_${name}_hex" }
         return ByteArray(clean.length / 2) { index ->
             clean.substring(index * 2, index * 2 + 2).toInt(16).toByte()
@@ -112,4 +125,5 @@ internal object LanCommandCodec {
     }
 
     private const val MAX_PAYLOAD_BYTES = 1_010
+    private const val MAX_WIRE_BYTES = 4_096
 }

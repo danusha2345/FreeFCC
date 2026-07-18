@@ -252,7 +252,9 @@ app/src/main/
     led_on.json        1 frame, LED on (port 40007)
     led_off.json       1 frame, LED off (port 40007)
   java/com/freefcc/app/
-    DumlTransport.kt  Frame builder (CRC-8/16) + TCP socket I/O
+    DumlTransport.kt  Frame builder, incremental parser + bounded socket I/O
+    FccRuntime.kt      Process-local FCC write and keepalive runtime evidence
+    FccKeepaliveService.kt Foreground periodic FCC re-apply
     LanControl.kt      LAN command validation and JSON encoding
     NetworkLogServer.kt Private-Wi-Fi logs/status/command HTTP API
     Profiles.kt        JSON profile loader

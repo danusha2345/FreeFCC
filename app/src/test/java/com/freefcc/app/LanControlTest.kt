@@ -46,6 +46,11 @@ class LanControlTest {
         assertEquals(40009, LanCommandCodec.optionalPort(params))
         assertEquals(3000, LanCommandCodec.optionalCaptureDuration(emptyMap()))
         assertEquals(64, LanCommandCodec.optionalCaptureMaxFrames(emptyMap()))
+        assertEquals(16_384, LanCommandCodec.optionalMaxBytes(emptyMap()))
+        assertArrayEquals(
+            byteArrayOf(0x55, 0xCC.toByte()),
+            LanCommandCodec.requiredWireHex(mapOf("wire_hex" to "55cc"))
+        )
     }
 
     @Test
