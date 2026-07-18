@@ -1,6 +1,8 @@
 package com.freefcc.app
 
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.CountDownLatch
@@ -18,16 +20,16 @@ class HardwareLockTest {
 
     @Test
     fun secondTryBeginFailsWhileFirstHoldsTheLock() {
-        val firstAcquired = HardwareLock.tryBegin()
+        val firstLease = HardwareLock.tryBegin()
         try {
-            assertTrue("lock must be free at test start", firstAcquired)
+            assertNotNull("lock must be free at test start", firstLease)
             assertTrue(HardwareLock.busy.value)
 
             val secondAttempted = CountDownLatch(1)
-            val secondResult = AtomicBoolean(true)
+            val secondResult = AtomicBoolean(false)
 
             val secondThread = Thread {
-                secondResult.set(HardwareLock.tryBegin())
+                secondResult.set(HardwareLock.tryBegin() != null)
                 secondAttempted.countDown()
             }
             secondThread.start()
@@ -42,15 +44,33 @@ class HardwareLockTest {
         } finally {
             // Only release what this test actually acquired — never unlock on behalf
             // of another op, and never leak the lock into later tests on assertion failure.
-            if (firstAcquired) HardwareLock.end()
+            firstLease?.close()
         }
         assertFalse(HardwareLock.busy.value)
 
         val reacquired = HardwareLock.tryBegin()
         try {
-            assertTrue("lock must be free again after end()", reacquired)
+            assertNotNull("lock must be free again after close()", reacquired)
         } finally {
-            if (reacquired) HardwareLock.end()
+            reacquired?.close()
         }
+    }
+
+    @Test
+    fun closingOldLeaseAgainCannotUnlockNewOwner() {
+        val firstLease = HardwareLock.tryBegin()
+        assertNotNull(firstLease)
+        firstLease!!.close()
+
+        val secondLease = HardwareLock.tryBegin()
+        try {
+            assertNotNull(secondLease)
+            firstLease.close()
+            assertNull("old lease must not unlock the current owner", HardwareLock.tryBegin())
+            assertTrue(HardwareLock.busy.value)
+        } finally {
+            secondLease?.close()
+        }
+        assertFalse(HardwareLock.busy.value)
     }
 }

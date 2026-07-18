@@ -1,6 +1,7 @@
 package com.freefcc.app
 
 import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
@@ -13,6 +14,32 @@ import org.junit.Test
  * A response reverses [4]<->[5] (sender<->receiver) and sets bit 7 of [8].
  */
 class DumlResponseValidationTest {
+
+    @Test
+    fun `builder uses receiver at byte 5 and command type at byte 8`() {
+        val frame = DumlBuilder().buildFrame(
+            DumlFrame(
+                sender = 0x82,
+                dst = 0x06,
+                cmdType = 0x20,
+                cmdSet = 0x06,
+                cmdId = 0x72,
+                payload = byteArrayOf(0x01, 0x02)
+            )
+        )
+
+        assertEquals(0x82, frame[4].toInt() and 0xFF)
+        assertEquals(0x06, frame[5].toInt() and 0xFF)
+        assertEquals(0x20, frame[8].toInt() and 0xFF)
+        assertEquals(0x06, frame[9].toInt() and 0xFF)
+        assertEquals(0x72, frame[10].toInt() and 0xFF)
+        assertEquals(DumlBuilder.crc8(frame, 0, 3), frame[3].toInt() and 0xFF)
+
+        val expectedCrc = DumlBuilder.crc16(frame, 0, frame.size - 2)
+        val actualCrc = (frame[frame.size - 2].toInt() and 0xFF) or
+            ((frame[frame.size - 1].toInt() and 0xFF) shl 8)
+        assertEquals(expectedCrc, actualCrc)
+    }
 
     private fun buildRawFrame(
         sender: Int,

@@ -10,6 +10,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -52,6 +53,11 @@ data class AppState(
     val isKeepaliveRunning: Boolean = false
 )
 
+internal data class FourGIdentity(
+    val payloadSerial: String,
+    val modelCode: String?
+)
+
 /**
  * Manages all app state and business logic.
  *
@@ -65,7 +71,10 @@ data class AppState(
 class FccViewModel(private val app: Application) : AndroidViewModel(app) {
 
     companion object {
-        const val APP_VERSION = "1.5.2"
+        const val APP_VERSION = "1.5.4"
+
+        private val FULL_SERIAL_PATTERN = Regex("^1581[0-9A-Z]{12,18}$")
+        private val MODEL_CODE_PATTERN = Regex("^W[AM][0-9]{3}")
 
         /**
          * Aircraft model codes known to support DJI Cellular Dongle 2 / 4G.
@@ -79,7 +88,27 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
          * wm630 = Inspire 3, wa341 = Mavic 4 Pro. All are DJI enterprise models
          * that ship with or accept the Cellular Dongle 2.
          */
-        private val MODELS_WITH_4G = setOf("wa341", "wa233", "wa234", "wm630", "wa140")
+        private val MODELS_WITH_4G = setOf("wa341", "wa233", "wa234", "wm630")
+
+        /**
+         * Normalizes an identity returned by [DumlTransport.probeSerial]. A
+         * full factory serial does not contain a model code, so model gating
+         * is only possible for the short WA/WM form. The 4G socket check still
+         * protects the full-serial path from sending when no dongle endpoint
+         * is available.
+         */
+        internal fun parseFourGIdentity(raw: String): FourGIdentity? {
+            val normalized = raw.trim().uppercase(Locale.US)
+            if (FULL_SERIAL_PATTERN.matches(normalized)) {
+                return FourGIdentity(normalized, null)
+            }
+            val modelCode = MODEL_CODE_PATTERN.find(normalized)?.value?.lowercase(Locale.US)
+                ?: return null
+            return FourGIdentity(normalized, modelCode)
+        }
+
+        internal fun isSupportedFourGModel(modelCode: String): Boolean =
+            modelCode.lowercase(Locale.US) in MODELS_WITH_4G
     }
 
     private val _state = MutableStateFlow(AppState())
@@ -87,6 +116,8 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private val transport = DumlTransport()
     private val prefs = app.getSharedPreferences("freefcc", Context.MODE_PRIVATE)
+    private var initialized = false
+    @Volatile private var aircraftIdentityVerified = false
 
     init {
         // MainActivity.onCreate() calls init() below on every Activity re-creation
@@ -103,13 +134,12 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Claims the shared hardware lock for one operation. Returns false if another (including the keepalive service) is already running. */
-    private fun beginHardwareOp(): Boolean = HardwareLock.tryBegin()
-
-    /** Releases the shared hardware lock. Must run in a finally block covering every exit path. */
-    private fun endHardwareOp() = HardwareLock.end()
+    /** Claims the shared hardware lock for one operation, or null if it is busy. */
+    private fun beginHardwareOp(): HardwareLock.Lease? = HardwareLock.tryBegin()
 
     fun init() {
+        if (initialized) return
+        initialized = true
         val model = try { Build.DEVICE } catch (_: Exception) { "unknown" }
         val autoEnabled = prefs.getBoolean("auto_fcc", false)
         // Sync the keepalive toggle with the persistent flag so the UI is
@@ -145,7 +175,8 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
      * service, and launches DJI Fly.
      */
     private fun autoConnectAndApply() {
-        if (!beginHardwareOp()) {
+        val hardwareLease = beginHardwareOp()
+        if (hardwareLease == null) {
             log("Auto-FCC skipped — another hardware operation is already running")
             return
         }
@@ -169,7 +200,10 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                 }
                 val serial = transport.probeSerial(1500)
                 if (serial.isNotEmpty()) {
+                    aircraftIdentityVerified = true
                     prefs.edit().putString("aircraft_serial", serial).apply()
+                } else {
+                    aircraftIdentityVerified = false
                 }
                 update {
                     copy(
@@ -200,14 +234,14 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                     update {
                         copy(
                             status = "fcc_enabled",
-                            message = "FCC enabled. Starting keepalive...",
+                            message = "FCC sequence written. Starting keepalive...",
                             isFccEnabled = true,
                             isBusy = false,
                             busyProgress = 1f,
                             isConnected = true
                         )
                     }
-                    log("Auto-FCC: FCC mode enabled")
+                    log("Auto-FCC: all FCC frames written; verify the region in DJI Fly")
 
                     // Auto-start keepalive
                     delay(500)
@@ -217,7 +251,7 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
 
                     // Auto-launch DJI Fly
                     delay(500)
-                    update { copy(message = "FCC active. Launching DJI Fly...") }
+                    update { copy(message = "FCC keepalive started. Launching DJI Fly...") }
                     log("Auto-FCC: launching DJI Fly")
                     launchDjiFly()
                 } else {
@@ -235,7 +269,7 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                 log("Auto-FCC error: ${e.message}")
                 update { copy(status = "disconnected", message = "Auto-FCC error: ${e.message}", isBusy = false, busyProgress = 0f) }
             } finally {
-                endHardwareOp()
+                hardwareLease.close()
             }
         }
     }
@@ -247,7 +281,8 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
      * Probes for the aircraft serial number after connecting.
      */
     fun connect() {
-        if (!beginHardwareOp()) {
+        val hardwareLease = beginHardwareOp()
+        if (hardwareLease == null) {
             log("Hardware busy — please wait for the current operation to finish.")
             return
         }
@@ -264,7 +299,10 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                     }
                     val serial = transport.probeSerial(1500)
                     if (serial.isNotEmpty()) {
+                        aircraftIdentityVerified = true
                         prefs.edit().putString("aircraft_serial", serial).apply()
+                    } else {
+                        aircraftIdentityVerified = false
                     }
                     update {
                         copy(
@@ -286,7 +324,7 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                     log("Connection failed — is the drone powered on?")
                 }
             } finally {
-                endHardwareOp()
+                hardwareLease.close()
             }
         }
     }
@@ -294,11 +332,12 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
     // --- FCC ---
 
     /**
-     * Sends the 21-frame FCC unlock profile (2 rounds, 150ms between frames).
+     * Sends the 21-frame FCC unlock profile using the timing from fcc.json.
      * The profile already runs 2 rounds internally for reliability.
      */
     fun enableFcc() {
-        if (!beginHardwareOp()) {
+        val hardwareLease = beginHardwareOp()
+        if (hardwareLease == null) {
             log("Hardware busy — please wait for the current operation to finish.")
             return
         }
@@ -323,14 +362,14 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                     update {
                         copy(
                             status = "fcc_enabled",
-                            message = "FCC mode enabled",
+                            message = "FCC sequence written — verify the region in DJI Fly",
                             isFccEnabled = true,
                             isBusy = false,
                             busyProgress = 1f,
                             isConnected = true
                         )
                     }
-                    log("FCC mode enabled — ${profile.frames.size} frames sent")
+                    log("FCC apply: all ${profile.frames.size * profile.rounds} frame writes completed; verify in DJI Fly")
                 } else {
                     update {
                         copy(
@@ -346,14 +385,15 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                 log("FCC apply error: ${e.message}")
                 update { copy(status = "connected", message = "FCC apply error: ${e.message}", isBusy = false, busyProgress = 0f) }
             } finally {
-                endHardwareOp()
+                hardwareLease.close()
             }
         }
     }
 
-    /** Sends the CE restore command: a single frame that resets to factory region. */
+    /** Sends the experimental CE/default-region request from ce_restore.json. */
     fun disableFcc() {
-        if (!beginHardwareOp()) {
+        val hardwareLease = beginHardwareOp()
+        if (hardwareLease == null) {
             log("Hardware busy — please wait for the current operation to finish.")
             return
         }
@@ -375,8 +415,15 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                 )
 
                 if (success) {
-                    update { copy(status = "connected", message = "CE mode restored", isFccEnabled = false, isBusy = false) }
-                    log("CE mode restored")
+                    update {
+                        copy(
+                            status = "connected",
+                            message = "CE restore command sent — verify the region in DJI Fly",
+                            isFccEnabled = false,
+                            isBusy = false
+                        )
+                    }
+                    log("CE restore command written — result is not readable; verify in DJI Fly")
                 } else {
                     update { copy(status = "connected", message = "CE restore failed — RC link unreachable", isBusy = false) }
                     log("CE restore failed")
@@ -385,7 +432,7 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                 log("CE restore error: ${e.message}")
                 update { copy(status = "connected", message = "CE restore error: ${e.message}", isBusy = false) }
             } finally {
-                endHardwareOp()
+                hardwareLease.close()
             }
         }
     }
@@ -479,18 +526,17 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
      * no "off" action: no send-only command exists to reliably deactivate it.
      *
      * Guards (added to stop the most common failure modes early):
-     * 1. Aircraft serial must be non-empty AND at least 6 chars. A 6-char
-     *    W[AM]xxx model code (WA341, WM630) is the minimum the 4G payload
-     *    format needs — a shorter string would produce a malformed payload.
-     * 2. Model code must be in the 4G-capable set. The Mini series rejects
-     *    4G at the firmware level; we tell the user up front rather than
-     *    fail after writing 128 frames.
-     * 3. The 4G dongle must be present (the abstract socket must be
+     * 1. Identity must be either a full 1581... factory serial or a short
+     *    W[AM]xxx model identity. Both are valid probeSerial() results.
+     * 2. A short model identity must be in the 4G-capable set. A full serial
+     *    does not expose the model code, so it proceeds to the socket check.
+     * 3. The 4G endpoint must be present (the abstract socket must be
      *    connectable). If `/duss/mb/0x205` does not exist, the cellular
      *    module is not attached and no frame can succeed.
      */
     fun send4gActivationFrames() {
-        if (!beginHardwareOp()) {
+        val hardwareLease = beginHardwareOp()
+        if (hardwareLease == null) {
             log("Hardware busy — please wait for the current operation to finish.")
             return
         }
@@ -499,26 +545,28 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
 
         runOnIO {
             try {
-                val serial = getOrProbeSerial()
-
-                // Guard 1: serial present and long enough for the 4G payload format.
-                if (serial.length < 6) {
+                val identity = parseFourGIdentity(getOrProbeSerial())
+                if (identity == null) {
                     update {
-                        copy(is4gBusy = false, fourGMessage = "4G needs the aircraft connected. Power on the drone, link it, and tap Connect first.")
+                        copy(
+                            is4gBusy = false,
+                            fourGMessage = "No usable aircraft identity. Power on and link the drone, then refresh its S/N."
+                        )
                     }
-                    log("4G activation failed — aircraft serial too short ('$serial'); need at least a W[AM]xxx model code")
+                    log("4G activation failed — probe did not return a full 1581... serial or WA/WM model identity")
                     return@runOnIO
                 }
 
-                // Guard 2: model must be in the 4G-capable set.
-                // The model code is the W[AM]xxx prefix (first 5-6 chars).
-                val modelCode = serial.take(5).lowercase()
-                if (modelCode !in MODELS_WITH_4G) {
+                val modelCode = identity.modelCode
+                if (modelCode != null && !isSupportedFourGModel(modelCode)) {
                     update {
                         copy(is4gBusy = false, fourGMessage = "4G is not supported on $modelCode. It requires a DJI Cellular Dongle 2, which is only available on Mavic 4 Pro / Matrice / Inspire 3.")
                     }
                     log("4G activation aborted — model $modelCode is not in the 4G-capable set $MODELS_WITH_4G")
                     return@runOnIO
+                }
+                if (modelCode == null) {
+                    log("4G model guard: full factory S/N detected; model will be validated by endpoint availability")
                 }
 
                 // Guard 3: dongle pre-check — fast-fail if the socket does not exist.
@@ -530,8 +578,8 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                     return@runOnIO
                 }
 
-                val profile = Profiles.load4g(app, serial)
-                log("Loaded 4G profile: ${profile.frames.size} frames (serial: $serial, model: $modelCode)")
+                val profile = Profiles.load4g(app, identity.payloadSerial)
+                log("Loaded 4G profile: ${profile.frames.size} frames (identity: ${identity.payloadSerial}, model: ${modelCode ?: "unknown"})")
 
                 // 4G uses Unix domain socket, not TCP
                 val success = transport.sendFramesUnix(
@@ -556,7 +604,7 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                 log("4G activation error: ${e.message}")
                 update { copy(is4gBusy = false, fourGMessage = "4G error: ${e.message}") }
             } finally {
-                endHardwareOp()
+                hardwareLease.close()
             }
         }
     }
@@ -644,7 +692,8 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
      */
     fun queryDeviceInfo() {
         if (!isControllerReachable()) return
-        if (!beginHardwareOp()) {
+        val hardwareLease = beginHardwareOp()
+        if (hardwareLease == null) {
             log("Hardware busy — please wait for the current operation to finish.")
             return
         }
@@ -677,13 +726,14 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                 log("Device info error: ${e.message}")
                 update { copy(isQueryingInfo = false, deviceInfo = "Error: ${e.message}") }
             } finally {
-                endHardwareOp()
+                hardwareLease.close()
             }
         }
     }
 
     fun probeSerial() {
-        if (!beginHardwareOp()) {
+        val hardwareLease = beginHardwareOp()
+        if (hardwareLease == null) {
             log("Hardware busy — please wait for the current operation to finish.")
             return
         }
@@ -692,14 +742,16 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
             try {
                 val serial = transport.probeSerial(2000)
                 if (serial.isNotEmpty()) {
+                    aircraftIdentityVerified = true
                     update { copy(aircraftSerial = serial) }
                     prefs.edit().putString("aircraft_serial", serial).apply()
                     log("Aircraft serial: $serial (cached)")
                 } else {
+                    aircraftIdentityVerified = false
                     log("No serial detected — is the aircraft powered on?")
                 }
             } finally {
-                endHardwareOp()
+                hardwareLease.close()
             }
         }
     }
@@ -707,6 +759,7 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
     // --- Updates ---
 
     fun checkForUpdates(force: Boolean = false) {
+        if (_state.value.isCheckingUpdate) return
         // Rate-limit: don't hit GitHub API more than once per hour.
         // Unauthenticated limit is 60 requests/hour per IP.
         // The timestamp is saved ONLY on success — a failed check does NOT
@@ -758,7 +811,7 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
      */
     fun ensureInstallPermission(): Boolean {
         val pm = app.packageManager
-        if (android.os.Build.VERSION.SDK_INT >= 26 && !pm.canRequestPackageInstalls()) {
+        if (!pm.canRequestPackageInstalls()) {
             log("Install permission needed — opening Settings. Grant 'Install unknown apps' for FreeFCC, then tap Download again.")
             val settingsIntent = android.content.Intent(
                 android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES
@@ -832,7 +885,7 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                 // On Android 8+ the user must grant "Install unknown apps"
                 // per-app. The RC2 may hide this Settings page — if so, the
                 // user needs to install via SD card + FileManager instead.
-                if (android.os.Build.VERSION.SDK_INT >= 26 && !pm.canRequestPackageInstalls()) {
+                if (!pm.canRequestPackageInstalls()) {
                     log("Install blocked — FreeFCC needs 'Install unknown apps' permission.")
                     log("Opening Settings to grant it. If the Settings page doesn't appear,")
                     log("install the update via SD card + FileManager instead.")
@@ -855,15 +908,22 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                 // The RC2's package installer may not handle content:// URIs
                 // from app-private cacheDir (a known Android issue). Copying
                 // to the app-specific external directory is more reliable.
-                val extDir = java.io.File(app.getExternalFilesDir(null), "updates").apply { mkdirs() }
-                val extFile = java.io.File(extDir, "freefcc_update.apk")
-                try {
-                    file.copyTo(extFile, overwrite = true)
-                } catch (e: Exception) {
-                    log("Could not copy APK to external storage: ${e.message}")
-                    // Fall back to the cache file
+                val extFile = app.getExternalFilesDir(null)?.let { extBase ->
+                    val extDir = java.io.File(extBase, "updates").apply { mkdirs() }
+                    java.io.File(extDir, "freefcc_update.apk")
                 }
-                val installFile = if (extFile.exists()) extFile else file
+                val stagedFile = if (extFile != null) {
+                    try {
+                        file.copyTo(extFile, overwrite = true)
+                        extFile
+                    } catch (e: Exception) {
+                        log("Could not copy APK to external storage: ${e.message}")
+                        null
+                    }
+                } else {
+                    null
+                }
+                val installFile = stagedFile ?: file
 
                 val uri = androidx.core.content.FileProvider.getUriForFile(
                     app, "${app.packageName}.fileprovider", installFile
@@ -919,24 +979,23 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
         return false
     }
 
-    /** Returns the cached serial, or probes the controller if not yet known. Caches the result in SharedPreferences. */
+    /**
+     * Returns an identity freshly verified in this process, probing when the
+     * current value came only from persistent cache. A cached identity may
+     * belong to a previously linked aircraft and must not be used blindly in
+     * serial-specific 4G frames.
+     */
     private fun getOrProbeSerial(): String {
-        var serial = _state.value.aircraftSerial
-        if (serial.isEmpty()) {
-            // Fall back to a serial persisted in a previous session.
-            serial = prefs.getString("aircraft_serial", "").orEmpty()
-            if (serial.isNotEmpty()) {
-                update { copy(aircraftSerial = serial) }
-            }
-        }
-        if (serial.isEmpty()) {
-            log("Probing for aircraft serial...")
-            serial = transport.probeSerial(2000)
-            if (serial.isNotEmpty()) {
-                update { copy(aircraftSerial = serial) }
-                prefs.edit().putString("aircraft_serial", serial).apply()
-                log("Aircraft serial: $serial (cached)")
-            }
+        val current = _state.value.aircraftSerial
+        if (aircraftIdentityVerified && current.isNotEmpty()) return current
+
+        log("Probing current aircraft identity for 4G...")
+        val serial = transport.probeSerial(2000)
+        if (serial.isNotEmpty()) {
+            aircraftIdentityVerified = true
+            update { copy(aircraftSerial = serial) }
+            prefs.edit().putString("aircraft_serial", serial).apply()
+            log("Aircraft identity: $serial (verified and cached)")
         }
         return serial
     }
@@ -994,7 +1053,7 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
 
     /** Atomically updates the state via a copy() block. */
     private fun update(block: AppState.() -> AppState) {
-        _state.value = _state.value.block()
+        _state.update(block)
     }
 
     /** Adds a timestamped entry to the activity log (most recent first, max 50). */

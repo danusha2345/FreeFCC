@@ -1,6 +1,6 @@
 {
   "name": "CE Restore",
-  "description": "Resets the radio to its factory-flashed default region (CE for CE units, FCC for FCC units). Single frame.",
+  "description": "Experimental request believed to restore the factory-flashed region. No readback confirms the resulting region; verify in DJI Fly.",
   "sender": 130,
   "sender_desc": "MOBILE_APP, index 4",
   "cmd_type": 6,
@@ -10,6 +10,6 @@
   "inter_round_delay_ms": 0,
   "read_window_ms": 80,
   "frames": [
-    { "s": 6, "i": 114, "d": 32, "p": "00000000000100", "note": "RADIO reset region to default (dst=ANY idx 1)" }
+    { "s": 6, "i": 114, "d": 32, "p": "00000000000100", "note": "Experimental RADIO default-region request (dst=ANY idx 1); hardware result unverified" }
   ]
 }

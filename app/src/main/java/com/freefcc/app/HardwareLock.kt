@@ -4,6 +4,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Process-wide serialization for every controller-/aircraft-facing DUML write.
@@ -17,24 +18,33 @@ object HardwareLock {
 
     private val mutex = Mutex()
     private val _busy = MutableStateFlow(false)
-    private val held = java.util.concurrent.atomic.AtomicBoolean(false)
     val busy: StateFlow<Boolean> = _busy.asStateFlow()
 
-    /** Claims the lock for one operation. Returns false if another is already running. */
-    fun tryBegin(): Boolean {
-        if (!mutex.tryLock()) return false
-        held.set(true)
-        _busy.value = true
-        return true
+    /**
+     * An owner-bound, idempotent lock lease. Only the lease returned by
+     * [tryBegin] can release its acquisition, so one component cannot
+     * accidentally unlock another component's hardware operation.
+     */
+    class Lease internal constructor(private val owner: Any) : AutoCloseable {
+        private val closed = AtomicBoolean(false)
+
+        override fun close() {
+            if (closed.compareAndSet(false, true)) {
+                release(owner)
+            }
+        }
     }
 
-    /** Releases the lock. Must run in a finally block covering every exit path.
-     *  No-op (with a log) if the caller does not own the lock — prevents
-     *  [IllegalMonitorStateException] from a stray end() call. */
-    fun end() {
-        if (!held.get()) return
-        held.set(false)
+    /** Claims the lock for one operation, or returns null if it is already held. */
+    fun tryBegin(): Lease? {
+        val owner = Any()
+        if (!mutex.tryLock(owner)) return null
+        _busy.value = true
+        return Lease(owner)
+    }
+
+    private fun release(owner: Any) {
         _busy.value = false
-        mutex.unlock()
+        mutex.unlock(owner)
     }
 }

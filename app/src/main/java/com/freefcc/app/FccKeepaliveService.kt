@@ -6,7 +6,6 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import android.os.IBinder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -15,6 +14,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Foreground service that keeps FCC mode active by re-applying the FCC
@@ -38,21 +38,23 @@ class FccKeepaliveService : Service() {
         private const val INTERVAL_MS = 2000L
         private const val PREFS_NAME = "freefcc"
         private const val PREF_KEEPALIVE = "keepalive_running"
+        private val runRequested = AtomicBoolean(false)
 
         fun start(context: Context) {
+            runRequested.set(true)
             context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .edit().putBoolean(PREF_KEEPALIVE, true).apply()
             val intent = Intent(context, FccKeepaliveService::class.java).apply {
                 action = ACTION_START
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
-            }
+            context.startForegroundService(intent)
         }
 
         fun stop(context: Context) {
+            // Set this before posting ACTION_STOP. The service intent is
+            // asynchronous, while disableFcc() must prevent another keepalive
+            // write immediately after its hardware lease is released.
+            runRequested.set(false)
             context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .edit().putBoolean(PREF_KEEPALIVE, false).apply()
             val intent = Intent(context, FccKeepaliveService::class.java).apply {
@@ -94,6 +96,7 @@ class FccKeepaliveService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
+                runRequested.set(false)
                 keepaliveJob?.cancel()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
@@ -104,12 +107,17 @@ class FccKeepaliveService : Service() {
                 // Respect the persistent flag so a system-kill-and-restart
                 // doesn't silently re-enable keepalive after the user stopped it.
                 if (intent?.action == null && !isRunningFlagSet(this)) {
+                    runRequested.set(false)
                     stopSelf()
                     return START_NOT_STICKY
                 }
+                runRequested.set(true)
                 // If the profile failed to load, don't become a silent
                 // foreground no-op — stop immediately.
                 if (cachedFrames == null) {
+                    runRequested.set(false)
+                    getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                        .edit().putBoolean(PREF_KEEPALIVE, false).apply()
                     stopSelf()
                     return START_NOT_STICKY
                 }
@@ -124,11 +132,11 @@ class FccKeepaliveService : Service() {
         keepaliveJob?.cancel()
         keepaliveJob = scope.launch {
             val frames = cachedFrames ?: return@launch
-            while (true) {
-                // Delay at the loop start, not the end, so the interval is
-                // INTERVAL_MS regardless of how long the send takes. The first
-                // tick fires after INTERVAL_MS (not immediately).
+            while (runRequested.get()) {
+                // The first tick fires after INTERVAL_MS. The synchronous send
+                // time is added to the period between successive loop starts.
                 delay(INTERVAL_MS)
+                if (!runRequested.get()) break
                 // Retry acquiring the lock with a short backoff instead of
                 // silently skipping the tick. This prevents a gap where DJI
                 // Fly can reset the radio to CE while another operation
@@ -136,23 +144,25 @@ class FccKeepaliveService : Service() {
                 // ~1-2s. With the retry, FCC is re-applied within ~200ms
                 // of the lock being released, instead of up to INTERVAL_MS
                 // later.
-                var sent = false
                 for (retry in 0 until 10) {
-                    if (HardwareLock.tryBegin()) {
+                    if (!runRequested.get()) break
+                    val hardwareLease = HardwareLock.tryBegin()
+                    if (hardwareLease != null) {
                         try {
-                            transport.sendFrames(
-                                frames = frames,
-                                rounds = 1,
-                                interFrameDelayMs = cachedInterFrameDelay,
-                                readWindowMs = cachedReadWindowMs,
-                                port = cachedPort
-                            )
-                            sent = true
+                            if (runRequested.get()) {
+                                transport.sendFrames(
+                                    frames = frames,
+                                    rounds = 1,
+                                    interFrameDelayMs = cachedInterFrameDelay,
+                                    readWindowMs = cachedReadWindowMs,
+                                    port = cachedPort
+                                )
+                            }
                         } catch (e: kotlinx.coroutines.CancellationException) {
                             throw e
                         } catch (_: Exception) {
                         } finally {
-                            HardwareLock.end()
+                            hardwareLease.close()
                         }
                         break
                     }
@@ -168,25 +178,19 @@ class FccKeepaliveService : Service() {
     }
 
     private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "FCC Keepalive",
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = "Keeps FCC mode active in the background"
-            }
-            val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(channel)
+        val channel = NotificationChannel(
+            CHANNEL_ID,
+            "FCC Keepalive",
+            NotificationManager.IMPORTANCE_LOW
+        ).apply {
+            description = "Keeps FCC mode active in the background"
         }
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannel(channel)
     }
 
     private fun createNotification(): Notification {
-        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Notification.Builder(this, CHANNEL_ID)
-        } else {
-            Notification.Builder(this)
-        }
+        val builder = Notification.Builder(this, CHANNEL_ID)
         // Tapping the notification opens the app
         val openIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP

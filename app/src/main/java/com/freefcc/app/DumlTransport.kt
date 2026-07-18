@@ -231,10 +231,10 @@ class DumlTransport {
     }
 
     /**
-     * Sends a list of frames over multiple rounds, discarding ACKs.
+     * Sends a list of frames over multiple rounds, draining ACKs best-effort.
      * Automatically finds the correct DUML port for the controller type.
      *
-     * Uses pipelined short-lived TCP connections (one frame per connection,
+     * Uses sequential short-lived TCP connections (one frame per connection,
      * matching the DJI proxy contract) with aggressive ACK handling: the ACK
      * read uses the shortest timeout that still reliably drains the proxy
      * response, and the post-ACK settle delay is minimal. This gives a fast
@@ -242,7 +242,7 @@ class DumlTransport {
      * RC link, vs ~12s with the old generous timeouts).
      *
      * @param onProgress Called with a 0..1 float as frames are sent
-     * @return true if at least one frame was written successfully
+     * @return true only if every requested frame write completed successfully
      */
     fun sendFrames(
         frames: List<ByteArray>,
@@ -253,28 +253,32 @@ class DumlTransport {
         port: Int = PORT,
         onProgress: (Float) -> Unit = {}
     ): Boolean {
+        if (frames.isEmpty() || rounds <= 0) return false
+
         // If port is the default (40009), scan for the actual working port.
         // If port is explicitly set (e.g. 40007 for LED), use it directly.
         val effectivePort = if (port == PORT) findWorkingPort() else port
 
-        var anySuccess = false
+        var allSuccess = true
         val totalSends = frames.size * rounds
         var sent = 0
 
         for (round in 0 until rounds) {
-            for (frame in frames) {
-                if (sendOneFrame(frame, readWindowMs, effectivePort)) {
-                    anySuccess = true
+            for ((frameIndex, frame) in frames.withIndex()) {
+                if (!sendOneFrame(frame, readWindowMs, effectivePort)) {
+                    allSuccess = false
                 }
                 sent++
                 onProgress(sent.toFloat() / totalSends)
-                if (interFrameDelayMs > 0) Thread.sleep(interFrameDelayMs)
+                if (interFrameDelayMs > 0 && frameIndex < frames.lastIndex) {
+                    Thread.sleep(interFrameDelayMs)
+                }
             }
             if (interRoundDelayMs > 0 && round < rounds - 1) {
                 Thread.sleep(interRoundDelayMs)
             }
         }
-        return anySuccess
+        return allSuccess
     }
 
     /**
@@ -329,10 +333,10 @@ class DumlTransport {
      *
      * Strategy (most reliable first):
      * 1. Passive listen on the DUML proxy for telemetry matching the full
-     *    1581XXXXXXXXXXX aircraft serial (16-20 chars). This is the real
+     *    1581XXXXXXXXXXX aircraft serial (16-22 chars). This is the real
      *    factory serial printed on the airframe.
      * 2. If no full serial appears, also accept the short model-code pattern
-     *    W[AM]xxx (5-6 chars: WA341, WM630, etc.). The short form is what the
+     *    W[AM]xxx (5 chars: WA341, WM630, etc.). The short form is what the
      *    4G activation frames actually carry (see captured profiles), but the
      *    full form is preferred for display and any 4G payload that wants it.
      *
@@ -340,7 +344,7 @@ class DumlTransport {
      * emits unsolicited status broadcasts containing the drone serial in
      * ASCII roughly once per second when the aircraft is linked and powered.
      *
-     * The result is validated for 4G use: a 6-char W[AM]xxx model code is
+     * The result is validated for 4G use: a 5-char W[AM]xxx model code is
      * accepted only as a fallback, since the 4G payload format expects at
      * least the model code. Callers that need the full 1581... serial should
      * check the length of the returned string.
@@ -445,7 +449,9 @@ class DumlTransport {
 
     /**
      * Sends a single frame via TCP. Used for FCC, CE, LED, device info.
-     * Waits for the ACK so the controller has time to process the frame.
+     * Drains a possible ACK so the proxy has time to process the frame. Some
+     * profiles intentionally request no ACK, so success means that connect,
+     * write and flush completed; it does not prove the aircraft changed state.
      */
     private fun sendOneFrame(frame: ByteArray, readWindowMs: Int, port: Int = PORT): Boolean {
         var socket: Socket? = null
@@ -460,25 +466,9 @@ class DumlTransport {
 
             socket.getOutputStream().apply { write(frame); flush() }
 
-            // Wait for the ACK so the controller has time to process, then close.
+            // Best-effort ACK drain. A timeout is not a write failure because
+            // NO_ACK_NEEDED profiles legitimately return no response.
             try { socket.getInputStream().read(ackBuffer) } catch (_: IOException) {}
-            return true
-        } catch (_: IOException) { return false }
-        finally { try { socket?.close() } catch (_: IOException) {} }
-    }
-
-    /**
-     * Sends a single frame via Unix domain socket (abstract namespace).
-     * Used for 4G activation. Fire-and-forget: write, flush, close.
-     * No ACK read — the 4G module doesn't respond on this socket.
-     */
-    private fun sendOneFrameUnix(frame: ByteArray): Boolean {
-        var socket: LocalSocket? = null
-        try {
-            socket = LocalSocket(LocalSocket.SOCKET_DGRAM)
-            socket.connect(LocalSocketAddress(UNIX_SOCKET_4G, LocalSocketAddress.Namespace.ABSTRACT))
-
-            socket.getOutputStream().apply { write(frame); flush() }
             return true
         } catch (_: IOException) { return false }
         finally { try { socket?.close() } catch (_: IOException) {} }

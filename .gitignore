@@ -11,6 +11,7 @@ app/build/
 gradle/.gradle/
 *.idsig
 .kotlin/
+.scratch/
 
 REMOTE_ID_INTERNAL.md
 
@@ -19,4 +20,3 @@ REVERSE_ENGINEERING.md
 keystore.properties
 *.jks
 *.keystore
-

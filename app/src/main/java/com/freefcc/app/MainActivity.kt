@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -29,10 +30,11 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -101,7 +103,7 @@ private fun AppRoot(viewModel: FccViewModel) {
         entrance.animateTo(1f, tween(700, easing = EaseOutCubic))
     }
 
-    BoxWithConstraints(
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .background(
@@ -160,6 +162,7 @@ private fun AppRoot(viewModel: FccViewModel) {
 
 @Composable
 private fun FccPage(state: AppState, viewModel: FccViewModel) {
+    val updateInfo = state.updateInfo
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -175,7 +178,7 @@ private fun FccPage(state: AppState, viewModel: FccViewModel) {
 
         // Update-available banner — shows on the FCC page so the user
         // doesn't have to manually check the Update tab.
-        if (state.updateAvailable && state.updateInfo != null && !state.isCheckingUpdate) {
+        if (state.updateAvailable && updateInfo != null && !state.isCheckingUpdate) {
             Spacer(Modifier.height(16.dp))
             GlowCard {
                 Row(
@@ -185,7 +188,7 @@ private fun FccPage(state: AppState, viewModel: FccViewModel) {
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            "Update available — v${state.updateInfo!!.version}",
+                            "Update available — v${updateInfo.version}",
                             color = Green, fontSize = 14.sp, fontWeight = FontWeight.SemiBold
                         )
                         Spacer(Modifier.height(2.dp))
@@ -220,7 +223,7 @@ private fun FccPage(state: AppState, viewModel: FccViewModel) {
                     GlowButton("Connect", Cyan, enabled = !state.isHardwareBusy) { viewModel.connect() }
                 }
                 state.isFccEnabled -> {
-                    BodyText("FCC mode is active.", Green)
+                    BodyText("FCC sequence was written. Verify the region in DJI Fly.", Green)
                     Spacer(Modifier.height(20.dp))
                     GlowButton("Stop FCC Mode", Red, enabled = !state.isHardwareBusy) { viewModel.disableFcc() }
                     Spacer(Modifier.height(12.dp))
@@ -527,10 +530,7 @@ private fun LogPage(state: AppState) {
                 }
             } else {
                 Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 600.dp)
-                        .verticalScroll(rememberScrollState())
+                    Modifier.fillMaxWidth()
                 ) {
                     state.logMessages.forEachIndexed { index, entry ->
                         val color = when {
@@ -951,7 +951,7 @@ private fun PageTitle(title: String, icon: androidx.compose.ui.graphics.vector.I
 private fun ConnectionPill(state: AppState) {
     val (label, color) = when {
         state.status == "connecting" -> "Connecting..." to Amber
-        state.isConnected -> "Connected" to Green
+        state.isConnected -> "DUML proxy ready" to Green
         state.status == "error" -> "Error" to Red
         else -> "Disconnected" to TextGray
     }
@@ -1039,14 +1039,14 @@ private fun ModeBadge(state: AppState) {
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                if (active) "FCC" else "CE",
+                if (active) "FCC SENT" else "DEFAULT",
                 color = if (active) Green else TextWhite,
                 fontSize = 30.sp,
                 fontWeight = FontWeight.Black
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                if (active) "High-power region active" else "Default region",
+                if (active) "Verify the region in DJI Fly" else "No FCC request active",
                 color = if (active) Green.copy(0.7f) else TextGray,
                 fontSize = 12.sp
             )
@@ -1067,6 +1067,7 @@ private fun ModeBadge(state: AppState) {
 
 @Composable
 private fun ProgressDisplay(progress: Float, label: String) {
+    val safeProgress = progress.coerceIn(0f, 1f)
     Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
         Text(label, color = Cyan, fontSize = 14.sp, fontWeight = FontWeight.Medium)
         Spacer(Modifier.height(16.dp))
@@ -1079,7 +1080,7 @@ private fun ProgressDisplay(progress: Float, label: String) {
         ) {
             Box(
                 modifier = Modifier
-                    .fillMaxWidth(progress)
+                    .fillMaxWidth(safeProgress)
                     .height(8.dp)
                     .clip(RoundedCornerShape(4.dp))
                     .background(Brush.horizontalGradient(listOf(Cyan, Green)))
@@ -1087,7 +1088,7 @@ private fun ProgressDisplay(progress: Float, label: String) {
         }
         Spacer(Modifier.height(10.dp))
         Text(
-            "${(progress * 100).toInt()}%",
+            "${(safeProgress * 100).toInt()}%",
             color = TextGray,
             fontSize = 12.sp,
             fontFamily = FontFamily.Monospace,
@@ -1108,6 +1109,7 @@ private fun BodyText(text: String, color: Color = TextGray) {
 
 @Composable
 private fun SerialRow(serial: String, enabled: Boolean = true, onRefresh: () -> Unit) {
+    val identityLabel = if (serial.startsWith("1581")) "S/N: " else "Model: "
     Surface(
         color = BgLight.copy(0.4f),
         shape = RoundedCornerShape(10.dp),
@@ -1119,9 +1121,16 @@ private fun SerialRow(serial: String, enabled: Boolean = true, onRefresh: () -> 
         ) {
             Icon(Icons.Filled.Flight, null, tint = Cyan.copy(0.6f), modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(10.dp))
-            Text("S/N: ", color = TextGray, fontSize = 12.sp)
-            Text(serial, color = TextWhite, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.weight(1f))
+            Text(identityLabel, color = TextGray, fontSize = 12.sp)
+            Text(
+                serial,
+                color = TextWhite,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
             IconButton(onClick = onRefresh, enabled = enabled, modifier = Modifier.size(24.dp)) {
                 Icon(Icons.Default.Refresh, "Refresh", tint = TextGray, modifier = Modifier.size(16.dp))
             }
@@ -1137,12 +1146,16 @@ private fun InfoRow(label: String, value: String, valueColor: Color = TextWhite)
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(label, color = TextGray, fontSize = 13.sp)
+        Spacer(Modifier.width(12.dp))
         Text(
             value,
             color = valueColor,
             fontSize = 13.sp,
             fontWeight = FontWeight.SemiBold,
-            maxLines = 1
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.End,
+            modifier = Modifier.weight(1f)
         )
     }
 }
@@ -1284,7 +1297,11 @@ private fun BottomNavBar(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier
                         .weight(1f)
-                        .clickable { onPageSelected(index) }
+                        .selectable(
+                            selected = selected,
+                            onClick = { onPageSelected(index) },
+                            role = Role.Tab
+                        )
                         .padding(vertical = 8.dp)
                 ) {
                     Icon(

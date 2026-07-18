@@ -2,5 +2,4 @@
 <paths>
     <cache-path name="updates" path="updates/" />
     <external-files-path name="extfiles" path="updates/" />
-    <external-path name="external" path="FreeFCC/" />
 </paths>

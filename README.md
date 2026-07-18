@@ -69,7 +69,7 @@ You need both. The helper apps let you sideload FreeFCC onto the RC2.
 | Other RC2 aircraft | RC2 | Should work | Unknown | Unknown | FCC profile is universal |
 | RC Pro 2 / RC Plus | All | Direct install | Use [freefcc-launcher](https://github.com/doesthings/freefcc-launcher) for 4G | - | FCC works without launcher |
 
-4G activation is enterprise-only: it requires a DJI Cellular Dongle 2 physically connected to the aircraft. The Mini series does not have a cellular module and cannot accept 4G activation frames. FreeFCC checks the aircraft model code before sending 4G frames and refuses early if the model is not in the 4G-capable set (`wa341` Mavic 4 Pro, `wa233`/`wa234` Matrice 300/350, `wm630` Inspire 3, `wa140`). 4G activation on the Mavic 4 Pro requires the [freefcc-launcher](https://github.com/doesthings/freefcc-launcher) on RC Pro 2 / RC Plus.
+4G activation is enterprise-only: it requires a DJI Cellular Dongle 2 physically connected to the aircraft. The Mini series does not have a cellular module and cannot accept 4G activation frames. When the probe returns a short model identity, FreeFCC refuses models outside the 4G-capable set (`wa341` Mavic 4 Pro, `wa233`/`wa234` Matrice 300/350, `wm630` Inspire 3). A full `1581...` factory serial does not encode the model, so that path relies on the 4G socket pre-check. 4G activation on the Mavic 4 Pro requires the [freefcc-launcher](https://github.com/doesthings/freefcc-launcher) on RC Pro 2 / RC Plus.
 
 Tested on DJI RC 2 firmware v10.00.0700 and DJI RC Pro 2. Older firmware versions should also work, and future versions will likely continue to work unless DJI patches the DUML param write path.
 
@@ -177,7 +177,9 @@ Each command is a small binary packet with a magic byte (`0x55`), a header with 
 
 ### FCC Profile
 
-21 frames sent in 2 rounds with 10ms between each frame and 100ms between rounds. The sequence enters service mode, sets the radio region to FCC, writes channel groups and power limits, commits the change, and exits service mode. The same 21 frames work on every DJI aircraft model tested (Mini 5 Pro, Mini 4 Pro, Mavic 4 Pro, Air 3S, Neo, Avata 360). The frames are byte-for-byte identical to the universal sequence documented in the dji-firmware-tools project. The full 2-round apply completes in under 1 second on a healthy RC link.
+21 frames sent in 2 rounds with 30ms between frames and 100ms between rounds. The sequence enters service mode, sets the radio region to FCC, writes channel groups and power limits, commits the change, and exits service mode. The same 21 frames work on every DJI aircraft model tested (Mini 5 Pro, Mini 4 Pro, Mavic 4 Pro, Air 3S, Neo, Avata 360). All requested writes must now complete before the UI reports that the sequence was sent. The proxy cannot confirm the resulting RF region, so verify the Transmission graph in DJI Fly.
+
+The CE/default-region action is experimental. It writes the existing single-frame `ce_restore.json` profile, stops keepalive first, and reports only that the command was sent. Its effect must also be verified in DJI Fly.
 
 ### 4G Profile
 
@@ -187,7 +189,7 @@ Each command is a small binary packet with a magic byte (`0x55`), a header with 
 
 **How the 4G activation frames are sent:**
 
-Unlike FCC which goes through the standard DUML TCP proxy on port 40009, 4G frames are sent via a Unix domain socket at `/duss/mb/0x205` (abstract namespace). This is a separate DJI internal command bus that talks directly to the cellular/4G module. The app opens a new `LocalSocket` connection for each frame, writes the frame bytes, flushes, and closes. No ACK is read back since the 4G module does not respond on this socket — the app can only confirm the frames were written, never that the aircraft actually activated 4G. Before sending, the app checks that the socket is connectable; if it is not, it tells the user to attach the Cellular Dongle 2 rather than failing 128 times.
+Unlike FCC which goes through the standard DUML TCP proxy on port 40009, 4G frames are sent via a Unix domain socket at `/duss/mb/0x205` (abstract namespace). This is a separate DJI internal command bus that talks directly to the cellular/4G module. The app opens one `LocalSocket` for the complete 128-frame burst, writes and flushes each frame, then closes the socket. No ACK is read back — the app can only confirm the frames were written, never that the aircraft actually activated 4G. Before sending, the app checks that the socket is connectable; if it is not, it tells the user to attach the Cellular Dongle 2 rather than failing 128 times.
 
 The frame format is:
 - `sender = 2` (CAMERA)
@@ -197,7 +199,7 @@ The frame format is:
 - `dst = 238` (0xEE, OFDM_GROUND index 7)
 - `payload = 000000 + ASCII(aircraft_serial)`
 
-The aircraft serial is probed by listening on TCP port 40009 for telemetry data. The serial format is typically `1581XXXXXXXXXXX` (16-20 uppercase alphanumeric characters — the factory serial printed on the airframe). If the full serial is not found within the listen window, the app falls back to the shorter model code pattern `W[AM]xxx` (e.g. `WA341`, `WM630`). The captured 4G profile uses the short model-code form (`WA341TEST`), so the fallback is sufficient for 4G. The serial is cached in SharedPreferences across sessions so the user does not have to re-probe every launch.
+The aircraft identity is probed by listening on the detected DUML TCP port for telemetry data. The preferred format is a full `1581...` factory serial. If it is not found within the listen window, the app falls back to the 5-character model pattern `W[AM]xxx` (for example `WA341` or `WM630`). Both forms are accepted by the 4G flow; a short identity can be checked against the model allowlist, while a full factory serial proceeds to the socket pre-check. The last identity is cached for display, but serial-specific 4G sending requires it to be freshly observed in the current process so a previous aircraft's cached value is not reused blindly.
 
 4G activation requires a DJI Cellular Dongle 2 to be physically connected to the aircraft. Without the dongle, the Unix socket `/duss/mb/0x205` will not exist and the frames will fail to send. FreeFCC detects this with a fast pre-check before sending any frames.
 
@@ -227,7 +229,7 @@ The DUML proxy on DJI controllers listens on `127.0.0.1:40009` and accepts plain
 tcpdump -i lo -w /sdcard/capture.pcap port 40009
 ```
 
-The frames are plaintext on the local socket with no encryption. Once captured, the payloads were decoded using the publicly documented command set and device type enums from the [dji-firmware-tools](https://github.com/o-gs/dji-firmware-tools) project (GPL-3.0). This project's `DumlBuilder` class implements the same CRC-8 (polynomial 0x8C reflected, init 0x77) and CRC-16 (polynomial 0x8408 reflected of 0x1021, init 0x3692) as the reference implementation to build valid frames from the decoded command definitions. The wire layout is: `[0]=0x55 magic, [1-2]=length, [3]=CRC-8, [4]=sender, [5]=cmdType, [6-7]=seq, [8]=dst, [9]=cmdSet, [10]=cmdId, [11..N]=payload, [N+1..N+2]=CRC-16`.
+The frames are plaintext on the local socket with no encryption. Once captured, the payloads were decoded using the publicly documented command set and device type enums from the [dji-firmware-tools](https://github.com/o-gs/dji-firmware-tools) project (GPL-3.0). This project's `DumlBuilder` class implements the same CRC-8 (polynomial 0x8C reflected, init 0x77) and CRC-16 (polynomial 0x8408 reflected of 0x1021, init 0x3692) as the reference implementation to build valid frames from the decoded command definitions. The wire layout is: `[0]=0x55 magic, [1-2]=length, [3]=CRC-8, [4]=sender, [5]=dst, [6-7]=seq, [8]=cmdType, [9]=cmdSet, [10]=cmdId, [11..N]=payload, [N+1..N+2]=CRC-16`.
 
 ## Project Structure
 
@@ -235,7 +237,7 @@ The frames are plaintext on the local socket with no encryption. Once captured, 
 app/src/main/
   assets/profiles/
     fcc.json          21 frames, FCC unlock
-    ce_restore.json    1 frame, reset to factory region
+    ce_restore.json    1 experimental default-region request
     4g.json           128 frames, 4G activation
     device_info.json   1 frame, version inquiry
     led_on.json        1 frame, LED on (port 40007)
@@ -275,7 +277,11 @@ cd /path/to/FreeFCC
 ./gradlew assembleRelease --no-daemon
 ```
 
-Run the unit tests with `./gradlew testDebugUnitTest`.
+Run the local verification gates with:
+
+```bash
+./gradlew testDebugUnitTest assembleDebug lintDebug
+```
 
 ### Release signing
 

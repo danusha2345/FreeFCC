@@ -90,7 +90,9 @@ object UpdateChecker {
                     apkUrl = asset.optString("browser_download_url", "")
                     apkSize = asset.optLong("size", 0)
                     // GitHub returns "sha256:<hex>" in the digest field.
-                    sha256 = asset.optString("digest", "").removePrefix("sha256:").ifEmpty { null }
+                    sha256 = asset.optString("digest", "")
+                        .removePrefix("sha256:")
+                        .takeIf { it.matches(Regex("[0-9a-fA-F]{64}")) }
                     break
                 }
             }
@@ -136,11 +138,11 @@ object UpdateChecker {
             val outputDir = File(context.cacheDir, "updates").apply { mkdirs() }
             val outputFile = File(outputDir, "freefcc_update.apk")
             val md = info.sha256?.let { MessageDigest.getInstance("SHA-256") }
+            var downloaded = 0L
 
             FileOutputStream(outputFile).use { fos ->
                 conn.inputStream.use { input ->
                     val buffer = ByteArray(8192)
-                    var downloaded = 0L
                     while (true) {
                         val read = input.read(buffer)
                         if (read <= 0) break
@@ -150,6 +152,11 @@ object UpdateChecker {
                         onProgress((downloaded.toFloat() / totalBytes).coerceIn(0f, 1f))
                     }
                 }
+            }
+
+            if (info.apkSize > 0 && downloaded != info.apkSize) {
+                outputFile.delete()
+                return null
             }
 
             // Verify the digest if GitHub provided one. A mismatch means the
