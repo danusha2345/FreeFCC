@@ -174,10 +174,8 @@ private fun FccPage(state: AppState, viewModel: FccViewModel) {
             .padding(bottom = BottomNavHeight + PageBottomPadding),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Spacer(Modifier.height(PageTopPadding))
-        AppHeader(state.controllerModel)
-        Spacer(Modifier.height(12.dp))
-        ConnectionPill(state)
+        Spacer(Modifier.height(8.dp))
+        FccHeader(state)
 
         // Update-available banner — shows on the FCC page so the user
         // doesn't have to manually check the Update tab.
@@ -949,44 +947,61 @@ private fun SupportPage() {
 // ═══════════════════════════════════════════════════════════════════════
 
 @Composable
-private fun AppHeader(model: String) {
-    val glow = rememberInfiniteTransition(label = "hdr")
-    val glowAlpha by glow.animateFloat(
-        0.5f, 0.9f,
-        infiniteRepeatable(tween(2800, easing = EaseInOutSine), RepeatMode.Reverse),
-        label = "hdrGlow"
-    )
+private fun FccHeader(state: AppState) {
+    val (connectionLabel, connectionColor) = when {
+        state.status == "connecting" -> "Connecting" to Amber
+        state.isConnected -> "DUML ready" to Green
+        state.status == "error" -> "Error" to Red
+        else -> "Offline" to TextGray
+    }
+    val versionAndModel = if (state.controllerModel.isNotEmpty()) {
+        "v${FccViewModel.APP_VERSION} · ${state.controllerModel}"
+    } else {
+        "v${FccViewModel.APP_VERSION}"
+    }
 
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier.size(168.dp, 44.dp)
-        ) {
-            Box(
-                Modifier
-                    .size(168.dp, 44.dp)
-                    .background(
-                        Brush.radialGradient(
-                            listOf(Cyan.copy(glowAlpha * 0.12f), Color.Transparent),
-                            radius = 140f
-                        )
-                    )
-            )
-            Text(
-                "FreeFCC",
-                color = Cyan.copy(alpha = glowAlpha),
-                fontSize = 27.sp,
-                fontWeight = FontWeight.Black,
-                letterSpacing = 1.sp
-            )
-        }
-        Spacer(Modifier.height(2.dp))
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
         Text(
-            if (model.isNotEmpty()) "v${FccViewModel.APP_VERSION} · $model" else "v${FccViewModel.APP_VERSION}",
-            color = TextDim,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Medium
+            "FreeFCC",
+            color = Cyan,
+            fontSize = 22.sp,
+            fontWeight = FontWeight.Black,
+            letterSpacing = 0.5.sp
         )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            versionAndModel,
+            color = TextDim,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+        Spacer(Modifier.width(8.dp))
+        Surface(
+            color = connectionColor.copy(0.1f),
+            shape = CircleShape,
+            border = BorderStroke(1.dp, connectionColor.copy(0.3f))
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+            ) {
+                Box(Modifier.size(6.dp).background(connectionColor, CircleShape))
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    connectionLabel,
+                    color = connectionColor,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1
+                )
+            }
+        }
     }
 }
 
@@ -996,59 +1011,6 @@ private fun PageTitle(title: String, icon: androidx.compose.ui.graphics.vector.I
         Icon(icon, null, tint = Cyan, modifier = Modifier.size(22.dp))
         Spacer(Modifier.width(9.dp))
         Text(title, color = TextWhite, fontSize = 21.sp, fontWeight = FontWeight.Bold)
-    }
-}
-
-@Composable
-private fun ConnectionPill(state: AppState) {
-    val (label, color) = when {
-        state.status == "connecting" -> "Connecting..." to Amber
-        state.isConnected -> "DUML proxy ready" to Green
-        state.status == "error" -> "Error" to Red
-        else -> "Disconnected" to TextGray
-    }
-
-    // Bounce-in on state change (no scale overflow — use alpha + small bump)
-    val bounce = remember { Animatable(1f) }
-    LaunchedEffect(state.isConnected) {
-        if (state.isConnected) {
-            bounce.snapTo(0.8f)
-            bounce.animateTo(1f, spring(dampingRatio = Spring.DampingRatioMediumBouncy))
-        }
-    }
-
-    // Pulsing glow when connected
-    val glowAlpha: Float = if (state.isConnected) {
-        val t = rememberInfiniteTransition(label = "pill")
-        val a by t.animateFloat(0.1f, 0.25f, infiniteRepeatable(tween(1800), RepeatMode.Reverse), label = "pillGlow")
-        a
-    } else 0f
-
-    Surface(
-        color = color.copy(0.1f),
-        shape = CircleShape,
-        border = BorderStroke(1.dp, color.copy(0.3f)),
-        modifier = Modifier
-            .padding(2.dp)
-            .scale(bounce.value)
-            .drawBehind {
-                if (glowAlpha > 0f) {
-                    drawCircle(color.copy(glowAlpha), radius = size.maxDimension * 0.75f)
-                }
-            }
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(8.dp)
-                    .background(color, CircleShape)
-            )
-            Spacer(Modifier.width(10.dp))
-            Text(label, color = color, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-        }
     }
 }
 
@@ -1072,48 +1034,48 @@ private fun ModeBadge(state: AppState) {
         }
     }
 
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(bgBrush)
-            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .padding(horizontal = 12.dp, vertical = 8.dp)
     ) {
-        Column(modifier = Modifier.weight(1f)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 "MODE",
                 color = TextDim,
-                fontSize = 10.sp,
+                fontSize = 9.sp,
                 fontWeight = FontWeight.Black,
-                letterSpacing = 2.sp
+                letterSpacing = 1.5.sp
             )
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.width(8.dp))
             Text(
                 if (active) "FCC SENT" else "DEFAULT",
                 color = if (active) Green else TextWhite,
-                fontSize = 26.sp,
+                fontSize = 20.sp,
                 fontWeight = FontWeight.Black
             )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                if (active) "Verify the region in DJI Fly" else "No FCC request active",
-                color = if (active) Green.copy(0.7f) else TextGray,
-                fontSize = 12.sp
-            )
+            Spacer(Modifier.weight(1f))
+            if (active) {
+                Icon(
+                    Icons.Filled.CheckCircle, null, tint = Green,
+                    modifier = Modifier.size(24.dp).scale(checkScale.value)
+                )
+            } else {
+                Icon(
+                    Icons.Outlined.Radio, null, tint = TextDim,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
         }
-        if (active) {
-            Icon(
-                Icons.Filled.CheckCircle, null, tint = Green,
-                modifier = Modifier.size(44.dp).scale(checkScale.value)
-            )
-        } else {
-            Icon(
-                Icons.Outlined.Radio, null, tint = TextDim,
-                modifier = Modifier.size(36.dp)
-            )
-        }
+        Spacer(Modifier.height(2.dp))
+        Text(
+            if (active) "Verify in DJI Fly" else "No FCC request active",
+            color = if (active) Green.copy(0.7f) else TextGray,
+            fontSize = 10.sp,
+            maxLines = 1
+        )
     }
 }
 

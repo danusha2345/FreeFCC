@@ -78,7 +78,7 @@ internal data class FourGIdentity(
 class FccViewModel(private val app: Application) : AndroidViewModel(app) {
 
     companion object {
-        const val APP_VERSION = "1.5.8"
+        const val APP_VERSION = "1.5.9"
 
         private const val MAX_LOG_ENTRIES = 50
         private val processLogLock = Any()

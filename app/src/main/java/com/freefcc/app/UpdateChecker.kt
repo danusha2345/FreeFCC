@@ -50,6 +50,17 @@ data class UpdateInfo(
 
 object UpdateChecker {
 
+    internal fun normalizeReleaseBody(raw: String): String = raw
+        .replace("\\r\\n", "\n")
+        .replace("\\n", "\n")
+        .lineSequence()
+        .filterNot { line ->
+            line.startsWith("APK SHA-256:", ignoreCase = true) ||
+                line.startsWith("Signing certificate SHA-256:", ignoreCase = true)
+        }
+        .joinToString("\n")
+        .trim()
+
     /**
      * Fetches the latest release info from GitHub.
      * Returns null on any error (network, parse, etc).
@@ -72,7 +83,7 @@ object UpdateChecker {
 
             val tagName = json.optString("tag_name", "").removePrefix("v")
             val name = json.optString("name", "v$tagName")
-            val changelog = json.optString("body", "").trim()
+            val changelog = normalizeReleaseBody(json.optString("body", ""))
             val publishedAt = json.optString("published_at", "")
 
             // Find the first APK asset
