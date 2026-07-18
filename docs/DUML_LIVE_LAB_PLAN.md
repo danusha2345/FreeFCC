@@ -2,12 +2,26 @@
 
 Дата: 2026-07-19.
 
-Статус: FreeFCC `1.5.12` установлен на DJI RC2 `rc331`. После команды
-пользователя code freeze снят; локальный draft `1.5.13` исправляет findings
-Claude и добавляет reviewed `wire_exchange`. Объединённая версия прошла 48 JVM
-unit-тестов, `lintDebug` и `assembleRelease`. Три независимых финальных review
-дали `GO` по parser/transport, LAN locking и FCC lifecycle. Commit, push,
-подписанный release, install и live-проверка ещё не завершены.
+Статус: исправления опубликованы как FreeFCC `1.5.13`. Commit `ce9ca18`
+исправляет findings Claude и добавляет reviewed `wire_exchange`, commit
+`cb51159` исправляет release workflow. Объединённая версия прошла 48 JVM
+unit-тестов, `lintDebug` и `assembleRelease`; три независимых финальных review
+дали `GO` по parser/transport, LAN locking и FCC lifecycle. Подписанный APK
+опубликован в GitHub Release. Установка `1.5.13` и live-проверка на RC2 ожидают
+повторного появления пульта по ADB или LAN.
+
+## Release evidence `1.5.13`
+
+| Проверка | Результат |
+|---|---|
+| Main | `cb51159bcfc89a5d17690a912b63c9da51d97ee4` запушен в `origin/main` |
+| GitHub Actions | run `29664093013`: build, 48 tests и Android lint завершены успешно |
+| CI signing | Repository signing secrets отсутствуют; CI загрузил только `app-release-unsigned.apk` |
+| Совместимость подписи | Release подписан локальным `~/.android/debug.keystore`; certificate SHA-256 совпадает с `v1.5.12`: `1e50efc760a23d71f5ec57f855af4b8c42c21fea6da9122889d59b3b23b890ce` |
+| APK metadata | package `com.freefcc.app`, versionCode `30`, versionName `1.5.13`, APK Signature Scheme v3 |
+| Release artifact | `FreeFCC-1.5.13.apk`, SHA-256 `d5be20bfac263cf8cb9a004576a9c74eec052b4505b1c82075fd8eb7e3f3db38` |
+| Release | <https://github.com/danusha2345/FreeFCC/releases/tag/v1.5.13> |
+| RC2 reachability после release | ADB device отсутствует; старый `192.168.1.139:8787` недоступен; UDP beacon за 15 s не получен |
 
 ## Трекер исправлений `1.5.13`
 
@@ -62,7 +76,7 @@ test на вызывающем потоке.
 5. Исправить lifecycle foreground service и убрать polling через `delay(750)`.
 6. Только затем довести `wire_exchange`, тесты, docs, version bump и release.
 
-## Live evidence на текущей версии
+## Исторический live evidence на `1.5.12`
 
 | Проверка | Результат | Вывод |
 |---|---|---|
