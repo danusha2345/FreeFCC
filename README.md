@@ -32,7 +32,7 @@ A free and open-source Android app that unlocks FCC mode, sends 4G activation fr
 |---------|-------------|
 | **FCC Unlock** | Switches the radio from CE to FCC mode for higher power and more channels |
 | **4G Activation** | Sends 4G activation frames to the aircraft (serial read at runtime) — no status readback, experimental |
-| **LED Control** | Turn aircraft arm LEDs on or off (requires DJI Fly running with aircraft connected) |
+| **LED Control** | Turn aircraft LEDs on or off (requires DJI Fly running with aircraft connected; on Avata 360, OFF also blanks the battery indicators) |
 | **Device Info** | Queries the controller for hardware and firmware version |
 | **Auto-FCC** | Toggle to automatically connect and apply FCC every time the app opens |
 | **Auto-Updater** | Checks `danusha2345/FreeFCC` GitHub Releases and lets you download/install from the app |
@@ -64,7 +64,7 @@ You need both. The helper apps let you sideload FreeFCC onto the RC2.
 | DJI Air 3S | RC2 | Yes | No (no cellular module) | Not tested | FCC working |
 | DJI Neo 1 | RC2 | Yes | No (no cellular module) | Not tested | FCC working |
 | DJI Neo 2 | RC2 | Yes | No (no cellular module) | Not tested | FCC working |
-| DJI Avata 360 Enhanced Transmission edition | RC2 | Yes | Unknown (integrated IoT eSIM; testing required) | Not tested | FCC working; 4G profile unverified |
+| DJI Avata 360 Enhanced Transmission edition | RC2 | Yes | Unknown (integrated IoT eSIM; testing required) | Yes | FCC + LED working; 4G endpoint reachable, profile unverified |
 | DJI Matrice 350 | RC Plus | Yes | Yes (Cellular Dongle 2) | Not tested | FCC should work |
 | DJI Inspire 3 | RC Plus | Yes | Yes (Cellular Dongle 2) | Not tested | FCC should work |
 | Other RC2 aircraft | RC2 | Should work | Unknown | Unknown | FCC profile is universal |
@@ -127,7 +127,7 @@ Swipe from the right edge to open ATV Launcher. Open the Files app, find your fo
 4. For 4G diagnostics, tap **Probe 4G Endpoint** first. This is read-only and only checks whether `/duss/mb/0x205` is reachable. **Send 4G Activation Frames** remains experimental and confirms writes only, not activation.
    > **Note:** The integrated eSIM path on DJI Avata 360 is not yet proven compatible with the captured external-module profile. Please attach the LAN logs to an [issue](https://github.com/danusha2345/FreeFCC/issues) when testing.
 5. To stop: tap **Stop FCC Mode** to restore CE
-6. For LED: tap **LED ON** or **LED OFF** (requires DJI Fly running with aircraft connected)
+6. For LED: tap **LED ON** or **LED OFF** (requires DJI Fly running with aircraft connected). On Avata 360, **LED OFF also blanks the battery indicators**; use **LED ON** to restore them.
 7. The **Info** tab lets you query the controller's hardware and firmware version
 8. The **Log** tab starts a password-protected LAN bridge by default. A UDP beacon advertises only the controller IP and port to a trusted client on the same private Wi-Fi network; it never broadcasts the password or log contents.
 

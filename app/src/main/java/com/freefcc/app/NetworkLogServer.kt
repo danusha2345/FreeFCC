@@ -193,7 +193,7 @@ internal class NetworkLogServer(
         private const val BEACON_INTERVAL_MS = 2_000L
 
         internal fun beaconPayload(endpoint: NetworkLogEndpoint): String =
-            "$BEACON_MAGIC address=${endpoint.address} port=${endpoint.port}"
+            "$BEACON_MAGIC address=${endpoint.address} port=${endpoint.port}\n"
 
         private fun broadcastAddresses(boundAddress: InetAddress): List<InetAddress> {
             val network = NetworkInterface.getByInetAddress(boundAddress)

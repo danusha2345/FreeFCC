@@ -5,7 +5,9 @@ import android.content.Context
 import android.os.Build
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -76,7 +78,7 @@ internal data class FourGIdentity(
 class FccViewModel(private val app: Application) : AndroidViewModel(app) {
 
     companion object {
-        const val APP_VERSION = "1.5.6"
+        const val APP_VERSION = "1.5.7"
 
         private const val MAX_LOG_ENTRIES = 50
         private val processLogLock = Any()
@@ -143,6 +145,7 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
     private val transport = DumlTransport()
     private val prefs = app.getSharedPreferences("freefcc", Context.MODE_PRIVATE)
     private var initialized = false
+    private var autoFccJob: Job? = null
     @Volatile private var aircraftIdentityVerified = false
 
     init {
@@ -240,13 +243,18 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
         val newValue = !_state.value.autoFcc
         prefs.edit().putBoolean("auto_fcc", newValue).apply()
         update { copy(autoFcc = newValue) }
-        log(if (newValue) "Auto-FCC enabled — will auto-connect on next launch" else "Auto-FCC disabled")
+        if (newValue) {
+            log("Auto-FCC enabled — will auto-connect on next launch")
+        } else {
+            autoFccJob?.cancel()
+            log("Auto-FCC disabled — active auto-flow cancellation requested")
+        }
     }
 
     /**
      * Connects to the controller and applies FCC mode automatically.
      * Waits for connection, then sends the FCC profile, starts the keepalive
-     * service, and launches DJI Fly.
+     * service, and launches DJI Fly while the Auto-FCC toggle remains enabled.
      */
     private fun autoConnectAndApply() {
         val hardwareLease = beginHardwareOp()
@@ -254,7 +262,7 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
             log("Auto-FCC skipped — another hardware operation is already running")
             return
         }
-        runOnIO {
+        autoFccJob = runOnIO {
             try {
                 // Wait a moment for the UI to render
                 delay(1000)
@@ -323,7 +331,9 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                     FccKeepaliveService.start(app)
                     log("Auto-FCC: keepalive started (re-applying every 2s)")
 
-                    // Auto-launch DJI Fly
+                    // Keep the intended Auto-FCC behavior, but make this delay
+                    // a cancellation checkpoint so switching Auto-FCC off does
+                    // not launch DJI Fly from an already-running flow.
                     delay(500)
                     update { copy(message = "FCC keepalive started. Launching DJI Fly...") }
                     log("Auto-FCC: launching DJI Fly")
@@ -339,11 +349,22 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                     }
                     log("Auto-FCC: apply failed — try manually")
                 }
+            } catch (_: CancellationException) {
+                log("Auto-FCC: cancelled by user")
+                update {
+                    copy(
+                        status = if (isConnected) "connected" else "disconnected",
+                        message = "Auto-FCC stopped",
+                        isBusy = false,
+                        busyProgress = 0f
+                    )
+                }
             } catch (e: Exception) {
                 log("Auto-FCC error: ${e.message}")
                 update { copy(status = "disconnected", message = "Auto-FCC error: ${e.message}", isBusy = false, busyProgress = 0f) }
             } finally {
                 hardwareLease.close()
+                autoFccJob = null
             }
         }
     }
@@ -1153,8 +1174,7 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     /** Launches a coroutine on Dispatchers.IO for network operations. */
-    private fun runOnIO(block: suspend () -> Unit) {
+    private fun runOnIO(block: suspend () -> Unit): Job =
         viewModelScope.launch(Dispatchers.IO) { block() }
-    }
 
 }

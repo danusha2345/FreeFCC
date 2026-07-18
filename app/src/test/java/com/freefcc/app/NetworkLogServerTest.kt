@@ -39,7 +39,7 @@ class NetworkLogServerTest {
             NetworkLogEndpoint("ignored", "192.168.1.42", 8787)
         )
 
-        assertTrue(payload == "FREEFCC_LOG_V1 address=192.168.1.42 port=8787")
+        assertTrue(payload == "FREEFCC_LOG_V1 address=192.168.1.42 port=8787\n")
         assertTrue(!payload.contains(NetworkLogServer.FIXED_ACCESS_PASSWORD))
     }
 

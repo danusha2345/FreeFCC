@@ -347,10 +347,10 @@ private fun FccPage(state: AppState, viewModel: FccViewModel) {
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("External LED", color = TextWhite, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Aircraft LEDs", color = TextWhite, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        "Turn aircraft arm LEDs on or off. Requires DJI Fly running with aircraft connected.",
+                        "Turn aircraft LEDs on or off. On Avata 360, LED OFF also blanks the battery indicators. Requires DJI Fly running with aircraft connected.",
                         color = TextGray,
                         fontSize = 12.sp,
                         lineHeight = 17.sp
