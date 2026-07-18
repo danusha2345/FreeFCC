@@ -6,9 +6,9 @@
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue?style=flat-square)](LICENSE)
 [![GitHub release](https://img.shields.io/github/v/release/danusha2345/FreeFCC?style=flat-square)](https://github.com/danusha2345/FreeFCC/releases)
-[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20this%20project-FF5E5B?style=flat-square&logo=ko-fi&logoColor=white)](https://ko-fi.com/freefcc)
+[![Boosty](https://img.shields.io/badge/Boosty-Support%20this%20project-FF7143?style=flat-square&logo=boosty&logoColor=white)](https://boosty.to/danusha/donate)
 
-A free and open-source Android app that unlocks FCC mode, sends 4G activation frames, and queries device info on DJI smart controllers with a screen (RC2, RC Pro 2, RC Plus). No server. No license. No tracking. Just raw DUML commands from JSON profile files.
+A free and open-source Android app that unlocks FCC mode, sends experimental 4G activation frames, and queries device info on DJI smart controllers with a screen (RC2, RC Pro 2, RC Plus). No external backend, paid activation, or tracking. Commands run locally from inspectable JSON profiles.
 
 </div>
 
@@ -32,14 +32,14 @@ A free and open-source Android app that unlocks FCC mode, sends 4G activation fr
 |---------|-------------|
 | **FCC Unlock** | Switches the radio from CE to FCC mode for higher power and more channels |
 | **4G Activation** | Sends 4G activation frames to the aircraft (serial read at runtime) — no status readback, experimental |
-| **LED Control** | Turn aircraft LEDs on or off (requires DJI Fly running with aircraft connected; on Avata 360, OFF also blanks the battery indicators) |
-| **Device Info** | Queries the controller for hardware and firmware version |
+| **LED Control** | Sends aircraft LED on/off commands through the controller's local proxy (DJI Fly and a linked aircraft are required) |
+| **Device Info** | Attempts to query hardware and firmware version; response availability depends on the controller/proxy path |
 | **Auto-FCC** | Toggle to automatically connect and apply FCC every time the app opens |
 | **Auto-Updater** | Checks `danusha2345/FreeFCC` GitHub Releases and lets you download/install from the app |
-| **LAN Log Bridge** | Auto-discovered, password-protected activity log endpoint on the controller's private Wi-Fi address |
-| **Local by default** | Internet is used only for update checks; the LAN log bridge stays on the controller's private Wi-Fi and can be disabled in the Log tab |
+| **LAN Diagnostic API** | Logs, live status, allowlisted app actions, and raw DUML request/response over HTTP on the controller's RFC1918 Wi-Fi address |
+| **Local by default** | Internet is used for update checks/downloads; the LAN API stays inside the current Wi-Fi subnet and can be disabled in the Log tab |
 | **Open Profiles** | Command frames are plain JSON files you can inspect and edit |
-| **No License** | No activation, no trial, no tracking, no server contact |
+| **No Paid Activation** | No trial, tracking, or external licensing backend |
 
 > **Note on altitude/distance/NFZ unlock:** This is **not possible** via DUML commands alone. The 120m CE altitude limit is enforced by the **DJI Fly app** via a C0 class runtime flag that overrides flight controller parameters on every connection. No FCC unlock app can bypass this — it requires modifying the DJI Fly app itself or flashing patched firmware. DUML parameter writes (cmd_set=3, cmd_id=0xF9) set the FC values, but the Fly app overrides them on every reconnect. There are three separate altitude layers (C0 class cap from the Fly app, no-GPS/ATTI ceiling from firmware, novice/beginner mode from firmware); only the firmware layers are DUML-addressable, and only the C0 class cap is the 120m limit users actually hit. There is no known way to bypass the C0 cap without modifying the DJI Fly app or flashing patched firmware.
 
@@ -50,11 +50,15 @@ A free and open-source Android app that unlocks FCC mode, sends 4G activation fr
 | FreeFCC App (APK) | [GitHub Releases](https://github.com/danusha2345/FreeFCC/releases) |
 | Helper Apps (zip) | [freefcc.duckdns.org/downloads/freefcc-helpers.zip](https://freefcc.duckdns.org/downloads/freefcc-helpers.zip) |
 
-You need both. The helper apps let you sideload FreeFCC onto the RC2.
+For the RC2 SD-card installation below, download both the APK and the helper archive. The archive contains the four sideloading utilities used by the guide.
+
+> The helper APKs are third-party sideloading tools. Their exact upstream
+> versions and licenses are not documented in this repository yet; review the
+> archive before using it on a controller.
 
 ## Compatibility
 
-**Tested on DJI RC2 and RC Pro 2.** The app installs directly on both controllers — no special launcher needed for FCC mode. The [freefcc-launcher](https://github.com/doesthings/freefcc-launcher) is only needed if you want 4G support on RC Pro 2 / RC Plus.
+This fork has current live validation on DJI RC2. Upstream reports also cover RC Pro 2 and RC Plus RM700. The separate [freefcc-launcher](https://github.com/doesthings/freefcc-launcher) is an optional Windows USB/ADB installer for controllers without the RC2 SD-card workflow. Its additional RC Pro 2 firmware-swap path for 4G is explicitly unverified and is not required by FreeFCC itself.
 
 | Drone | Controller | FCC | 4G | LED | Status |
 |-------|-----------|-----|-----|-----|--------|
@@ -65,22 +69,22 @@ You need both. The helper apps let you sideload FreeFCC onto the RC2.
 | DJI Neo 1 | RC2 | Yes | No (no cellular module) | Not tested | FCC working |
 | DJI Neo 2 | RC2 | Yes | No (no cellular module) | Not tested | FCC working |
 | DJI Avata 360 Enhanced Transmission edition | RC2 | Yes | Unknown (integrated IoT eSIM; testing required) | Yes | FCC + LED working; 4G endpoint reachable, profile unverified |
-| DJI Matrice 350 | RC Plus | Yes | Yes (Cellular Dongle 2) | Not tested | FCC should work |
-| DJI Inspire 3 | RC Plus | Yes | Yes (Cellular Dongle 2) | Not tested | FCC should work |
+| DJI M30T | RC Plus RM700 | Reported working | Reported working | Reported working | [Upstream hardware report](https://github.com/doesthings/FreeFCC/issues/18); firmware details not supplied |
+| DJI Matrice 350 | RC Plus | Expected, untested | Cellular hardware supported; profile unverified | Not tested | Hardware verification required |
+| DJI Inspire 3 | RC Plus | Expected, untested | Cellular hardware supported; profile unverified | Not tested | Hardware verification required |
 | Other RC2 aircraft | RC2 | Should work | Unknown | Unknown | FCC profile is universal |
-| RC Pro 2 / RC Plus | All | Direct install | Use [freefcc-launcher](https://github.com/doesthings/freefcc-launcher) for 4G | - | FCC works without launcher |
 
 The captured 4G profile is experimental and was derived from systems using external cellular hardware. DJI Avata 360 Enhanced Transmission edition instead has an integrated IoT eSIM module. FreeFCC can probe whether the controller exposes `/duss/mb/0x205`, but endpoint availability does not prove that the same 128-frame activation sequence is compatible. When the probe returns a short WA/WM identity, the legacy allowlist remains conservative (`wa341`, `wa233`, `wa234`, `wm630`); a freshly observed full `1581...` serial proceeds to the endpoint check.
 
-Tested on DJI RC 2 firmware v10.00.0700 and DJI RC Pro 2. Older firmware versions should also work, and future versions will likely continue to work unless DJI patches the DUML param write path.
+Validated upstream on DJI RC2 firmware v10.00.0700; this fork was additionally exercised live on RC2 `rc331`. Future firmware can change the local proxy or DUML routing, so compatibility must be rechecked rather than assumed.
+
+> **Known issue under investigation:** an [RC Pro report](https://github.com/doesthings/FreeFCC/issues/19) says the right zoom wheel stops responding while FCC keepalive is enabled. The app-level hardware lock does not coordinate with DJI Fly/Pilot processes. Until an A/B hardware test isolates the cause, disable keepalive if controller inputs behave unexpectedly.
 
 If you test it on a model or firmware version not listed here, please [open an issue](https://github.com/danusha2345/FreeFCC/issues) and let me know.
 
 ## Install Guide
 
-Tested on Mini 5 Pro with RC2, latest firmware. No PC needed.
-
-The full guide with screenshots is on [freefcc.duckdns.org](https://freefcc.duckdns.org). Here's the short version:
+The original flow was tested on Mini 5 Pro with RC2 firmware v10.00.0700. No PC is needed. The repository README is the maintained installation guide; the older `freefcc.duckdns.org` page is not currently authoritative.
 
 ### 1. Prep the SD card
 
@@ -127,9 +131,9 @@ Swipe from the right edge to open ATV Launcher. Open the Files app, find your fo
 4. For 4G diagnostics, tap **Probe 4G Endpoint** first. This is read-only and only checks whether `/duss/mb/0x205` is reachable. **Send 4G Activation Frames** remains experimental and confirms writes only, not activation.
    > **Note:** The integrated eSIM path on DJI Avata 360 is not yet proven compatible with the captured external-module profile. Please attach the LAN logs to an [issue](https://github.com/danusha2345/FreeFCC/issues) when testing.
 5. To stop: tap **Stop FCC Mode** to restore CE
-6. For LED: tap **LED ON** or **LED OFF** (requires DJI Fly running with aircraft connected). On Avata 360, **LED OFF also blanks the battery indicators**; use **LED ON** to restore them.
+6. For LED control, tap **LED ON** or **LED OFF**.
 7. The **Info** tab lets you query the controller's hardware and firmware version
-8. The **Log** tab starts a password-protected LAN bridge by default. A UDP beacon advertises only the controller IP and port to a trusted client on the same private Wi-Fi network; it never broadcasts the password or log contents.
+8. The **Log** tab starts the LAN diagnostic API by default. It uses unencrypted HTTP and a fixed shared password. A UDP beacon broadcasts only the controller IP and port across the current Wi-Fi subnet; it does not include the password, logs, or command payloads. Disable the bridge on untrusted Wi-Fi. See [LAN Control API](docs/LAN_CONTROL_API.md).
 
 ## How Do I Know If It Worked?
 
@@ -157,25 +161,27 @@ Open the DJI Fly app and go to the Transmission tab. Look at the horizontal bar 
 
 ## Support
 
-If FreeFCC helped you out, please consider starring the repo and buying me a coffee. It helps cover server costs and keeps development going.
+If FreeFCC helped you out, please consider starring the repo or supporting development on Boosty.
 
 <div align="center">
 
 [![Star on GitHub](https://img.shields.io/badge/Star%20on%20GitHub-%E2%AD%90-yellow?style=for-the-badge&logo=github)](https://github.com/danusha2345/FreeFCC)
 
-[![Support on Ko-fi](https://img.shields.io/badge/Ko--fi-Buy%20me%20a%20coffee-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/freefcc)
+[![Support on Boosty](https://img.shields.io/badge/Boosty-Support%20development-FF7143?style=for-the-badge&logo=boosty&logoColor=white)](https://boosty.to/danusha/donate)
 
 </div>
 
-Every contribution helps cover server costs and keeps development going. Thank you.
+Every contribution helps keep development and hardware testing going. Thank you.
 
 ---
 
 ## How It Works
 
-The app sends DUML commands to the controller's local TCP proxy at `127.0.0.1:40009`. DUML is DJI's internal command protocol, publicly documented in the [dji-firmware-tools](https://github.com/o-gs/dji-firmware-tools) project.
+For FCC, CE, and request/response diagnostics, the app sends DUML commands to localhost TCP proxies. RC2 normally uses `127.0.0.1:40009`; discovery also checks `40007` and `8901..8904` for other controller paths. DUML is DJI's internal command protocol, publicly documented in the [dji-firmware-tools](https://github.com/o-gs/dji-firmware-tools) project.
 
-Each command is a small binary packet with a magic byte (`0x55`), a header with sender and receiver info, a payload, and two CRC checksums. The app builds these packets from JSON profile files and sends them over TCP, one packet per connection.
+Each command is a small binary packet with a magic byte (`0x55`), routing fields, a payload, and two CRC checksums. Ordinary TCP commands use one packet per connection. LED commands use an outer wrapper on port `40007`; 4G uses one abstract Unix datagram socket for the complete frame burst.
+
+The LED buttons currently report successful command writes, not a read-back of the physical lamp state. The LAN API exposes a read-only `03:F8` hash probe for real state testing; see [LAN Control API](docs/LAN_CONTROL_API.md#read-the-current-lamp-parameter-by-hash). The UI will only claim verified state after that path is confirmed on hardware.
 
 ### FCC Profile
 
@@ -239,6 +245,7 @@ The frames are plaintext on the local socket with no encryption. Once captured, 
 app/src/main/
   assets/profiles/
     fcc.json          21 frames, FCC unlock
+    fcc_keepalive.json 4 frames, periodic FCC re-apply
     ce_restore.json    1 experimental default-region request
     4g.json           128 frames, 4G activation
     device_info.json   1 frame, version inquiry
@@ -246,6 +253,8 @@ app/src/main/
     led_off.json       1 frame, LED off (port 40007)
   java/com/freefcc/app/
     DumlTransport.kt  Frame builder (CRC-8/16) + TCP socket I/O
+    LanControl.kt      LAN command validation and JSON encoding
+    NetworkLogServer.kt Private-Wi-Fi logs/status/command HTTP API
     Profiles.kt        JSON profile loader
     FccViewModel.kt    State management + business logic
     MainActivity.kt    Compose UI with animations
@@ -265,7 +274,7 @@ Requirements: Java 17+, Android SDK 35.
 $env:JAVA_HOME = "C:\Program Files\Eclipse Adoptium\jdk-17.0.18.8-hotspot"
 $env:PATH = "$env:JAVA_HOME\bin;$env:PATH"
 
-cd C:\projects\fcc_opensource
+cd C:\projects\FreeFCC
 java -classpath gradle\wrapper\gradle-wrapper.jar org.gradle.wrapper.GradleWrapperMain assembleRelease --no-daemon
 ```
 
@@ -296,9 +305,9 @@ Release builds are **unsigned** by default. To produce a signed release APK, cre
 2. Copy `keystore.properties.example` to `keystore.properties` and fill in your keystore path and passwords.
 3. Run `./gradlew assembleRelease` — the build picks up `keystore.properties` automatically and signs the APK.
 
-CI builds can sign via repository secrets instead of the local file: set `SIGNING_STORE_FILE`, `SIGNING_STORE_PASSWORD`, `SIGNING_KEY_ALIAS`, `SIGNING_KEY_PASSWORD` (and `SIGNING_KEYSTORE_B64` as a base64-encoded keystore) in GitHub Actions.
+CI builds can sign via repository secrets instead of the local file. Configure `SIGNING_KEYSTORE_B64`, `SIGNING_STORE_PASSWORD`, `SIGNING_KEY_ALIAS`, and `SIGNING_KEY_PASSWORD`; the workflow creates `SIGNING_STORE_FILE` in the runner's temporary directory.
 
-> **Important:** Previous releases (v1.4.01 and earlier) were signed with Android's shared debug certificate. This has been fixed — release builds no longer fall back to the debug key. If you installed an older debug-signed APK, you will need to uninstall it before installing an APK signed with a new key.
+> **Important:** Android updates must be signed with the same certificate as the installed APK. Keep the release keystore stable. Changing the signing certificate requires uninstalling the existing app before installing the newly signed build.
 
 ## License
 
@@ -312,4 +321,4 @@ Questions, issues, or feedback? Reach out:
 
 - **Email:** [freefccidothings@gmail.com](mailto:freefccidothings@gmail.com)
 - **GitHub Issues:** [github.com/danusha2345/FreeFCC/issues](https://github.com/danusha2345/FreeFCC/issues)
-- **Ko-fi:** [ko-fi.com/freefcc](https://ko-fi.com/freefcc)
+- **Boosty:** [boosty.to/danusha/donate](https://boosty.to/danusha/donate)

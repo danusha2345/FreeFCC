@@ -136,7 +136,7 @@ object Profiles {
      *
      * Format: [0x55][0xCC][0x30][0x75][4-byte LE length][inner frame]
      */
-    private fun wrapFrame(inner: ByteArray): ByteArray {
+    internal fun wrapFrame(inner: ByteArray): ByteArray {
         val out = ByteArray(8 + inner.size)
         out[0] = 0x55
         out[1] = 0xCC.toByte()

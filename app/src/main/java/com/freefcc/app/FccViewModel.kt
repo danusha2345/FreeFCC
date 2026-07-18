@@ -18,6 +18,7 @@ import java.text.SimpleDateFormat
 import java.util.ArrayDeque
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Immutable UI state for the entire app.
@@ -54,7 +55,7 @@ data class AppState(
     val updateChecked: Boolean = false,
     // Keepalive state
     val isKeepaliveRunning: Boolean = false,
-    // Opt-in LAN log bridge state
+    // Opt-in LAN diagnostic bridge state
     val isLanLogStarting: Boolean = false,
     val lanLogUrl: String = "",
     val lanLogMessage: String = ""
@@ -78,15 +79,49 @@ internal data class FourGIdentity(
 class FccViewModel(private val app: Application) : AndroidViewModel(app) {
 
     companion object {
-        const val APP_VERSION = "1.5.10"
+        const val APP_VERSION = "1.5.11"
 
-        private const val MAX_LOG_ENTRIES = 50
+        private const val MAX_LOG_ENTRIES = 200
         private val processLogLock = Any()
         private val processLogs = ArrayDeque<String>()
+        @Volatile private var activeLanController: FccViewModel? = null
         private val networkLogServer = NetworkLogServer(
             logSnapshot = {
                 synchronized(processLogLock) { processLogs.toList() }
+            },
+            apiStatusSnapshot = {
+                activeLanController?.lanStatusJson()
+                    ?: LanJson.objectOf("ok" to false, "error" to "app_not_ready")
+            },
+            apiCommandHandler = { params ->
+                activeLanController?.handleLanCommand(params)
+                    ?: NetworkApiResponse(
+                        503,
+                        LanJson.objectOf("ok" to false, "error" to "app_not_ready")
+                    )
             }
+        )
+
+        private val LAN_COMMANDS = listOf(
+            "ping",
+            "connect",
+            "fcc_enable",
+            "ce_restore",
+            "keepalive_start",
+            "keepalive_stop",
+            "auto_fcc_on",
+            "auto_fcc_off",
+            "led_on",
+            "led_off",
+            "device_info",
+            "serial_probe",
+            "four_g_probe",
+            "four_g_activate",
+            "update_check",
+            "update_download",
+            "launch_dji_fly",
+            "duml_send",
+            "duml_request"
         )
 
         private val FULL_SERIAL_PATTERN = Regex("^1581[0-9A-Z]{12,18}$")
@@ -146,6 +181,7 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
     private val prefs = app.getSharedPreferences("freefcc", Context.MODE_PRIVATE)
     private var initialized = false
     private var autoFccJob: Job? = null
+    private val ledOperationBusy = AtomicBoolean(false)
     @Volatile private var aircraftIdentityVerified = false
 
     init {
@@ -167,6 +203,7 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
     private fun beginHardwareOp(): HardwareLock.Lease? = HardwareLock.tryBegin()
 
     fun init() {
+        activeLanController = this
         if (initialized) return
         initialized = true
         val model = try { Build.DEVICE } catch (_: Exception) { "unknown" }
@@ -184,9 +221,45 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
         if (autoEnabled) {
             log("Auto-FCC enabled — connecting and applying...")
             autoConnectAndApply()
+        } else {
+            restoreConnectionIndicator()
         }
 
         checkForUpdates()
+    }
+
+    /**
+     * Re-checks the local DUML proxy after the Activity/process is recreated.
+     * This restores the connection indicator without applying FCC mode or
+     * launching DJI Fly when Auto-FCC is disabled.
+     */
+    private fun restoreConnectionIndicator() {
+        update { copy(status = "connecting", message = "Checking DUML proxy...") }
+        runOnIO {
+            if (transport.connect()) {
+                val detectedPort = transport.getDetectedPort()
+                update {
+                    copy(
+                        status = "connected",
+                        isConnected = true,
+                        message = "DUML proxy ready."
+                    )
+                }
+                log("DUML proxy restored after app reopen")
+                if (detectedPort > 0) {
+                    log("DUML port detected: $detectedPort")
+                }
+            } else {
+                update {
+                    copy(
+                        status = "disconnected",
+                        isConnected = false,
+                        message = "DUML proxy not available. Tap Connect to retry."
+                    )
+                }
+                log("DUML proxy unavailable after app reopen")
+            }
+        }
     }
 
     // --- LAN logging ---
@@ -195,18 +268,8 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
         prefs.edit().putBoolean("lan_log_enabled", enabled).apply()
         if (!enabled) {
             networkLogServer.close()
-            update { copy(isLanLogStarting = false, lanLogUrl = "", lanLogMessage = "LAN log bridge stopped") }
-            log("LAN log bridge stopped")
-            return
-        }
-        networkLogServer.currentEndpoint()?.let { endpoint ->
-            update {
-                copy(
-                    isLanLogStarting = false,
-                    lanLogUrl = endpoint.url,
-                    lanLogMessage = "Ready on ${endpoint.address}:${endpoint.port}"
-                )
-            }
+            update { copy(isLanLogStarting = false, lanLogUrl = "", lanLogMessage = "LAN control bridge stopped") }
+            log("LAN control bridge stopped")
             return
         }
         if (_state.value.isLanLogStarting) return
@@ -222,12 +285,12 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                         lanLogMessage = "Ready on ${endpoint.address}:${endpoint.port}"
                     )
                 }
-                log("LAN log bridge ready at ${endpoint.address}:${endpoint.port} (password hidden from log)")
+                log("LAN control bridge ready at ${endpoint.address}:${endpoint.port} (password hidden from log)")
             } catch (e: Exception) {
                 networkLogServer.close()
                 val reason = e.message ?: e.javaClass.simpleName
-                update { copy(isLanLogStarting = false, lanLogUrl = "", lanLogMessage = "LAN log bridge failed: $reason") }
-                log("LAN log bridge failed: $reason")
+                update { copy(isLanLogStarting = false, lanLogUrl = "", lanLogMessage = "LAN control bridge failed: $reason") }
+                log("LAN control bridge failed: $reason")
             }
         }
     }
@@ -375,11 +438,11 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
      * Connects to the DUML proxy, auto-detecting the correct port.
      * Probes for the aircraft serial number after connecting.
      */
-    fun connect() {
+    fun connect(): Boolean {
         val hardwareLease = beginHardwareOp()
         if (hardwareLease == null) {
             log("Hardware busy — please wait for the current operation to finish.")
-            return
+            return false
         }
         update { copy(status = "connecting", message = "Connecting to controller...") }
         log("Connecting to controller...")
@@ -422,6 +485,7 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                 hardwareLease.close()
             }
         }
+        return true
     }
 
     // --- FCC ---
@@ -430,11 +494,11 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
      * Sends the 21-frame FCC unlock profile using the timing from fcc.json.
      * The profile already runs 2 rounds internally for reliability.
      */
-    fun enableFcc() {
+    fun enableFcc(): Boolean {
         val hardwareLease = beginHardwareOp()
         if (hardwareLease == null) {
             log("Hardware busy — please wait for the current operation to finish.")
-            return
+            return false
         }
         update { copy(status = "applying", isBusy = true, busyProgress = 0f, message = "Enabling FCC mode...") }
         log("Enabling FCC mode...")
@@ -483,14 +547,15 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                 hardwareLease.close()
             }
         }
+        return true
     }
 
     /** Sends the experimental CE/default-region request from ce_restore.json. */
-    fun disableFcc() {
+    fun disableFcc(): Boolean {
         val hardwareLease = beginHardwareOp()
         if (hardwareLease == null) {
             log("Hardware busy — please wait for the current operation to finish.")
-            return
+            return false
         }
         // Stop keepalive first — otherwise it re-applies FCC 2 seconds after
         // we restore CE, undoing the user's intent.
@@ -530,6 +595,7 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                 hardwareLease.close()
             }
         }
+        return true
     }
 
     // --- FCC Keepalive ---
@@ -560,9 +626,9 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
     // --- Launch DJI Fly ---
 
     /**
-     * Launches the DJI Fly app (dji.go.v5) so the user can continue flying
-     * with FCC mode active. The keepalive service keeps re-applying FCC in the
-     * background while DJI Fly runs.
+     * Launches DJI Fly on consumer controllers, with DJI Go 4 and DJI Pilot 2
+     * fallbacks for older/enterprise controllers. The keepalive service keeps
+     * re-applying FCC in the background while the flight app runs.
      */
     fun launchDjiFly() {
         val pm = app.packageManager
@@ -606,7 +672,18 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
             } catch (_: Exception) {}
         }
 
-        log("DJI Fly not installed or cannot launch on this controller")
+        // Fallback 3: DJI Pilot 2 on RC Plus / enterprise controllers.
+        intent = pm.getLaunchIntentForPackage("com.dji.industry.pilot")
+        if (intent != null) {
+            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            try {
+                app.startActivity(intent)
+                log("Launched DJI Pilot 2")
+                return
+            } catch (_: Exception) {}
+        }
+
+        log("DJI Fly, DJI Go 4, or DJI Pilot 2 is not installed or cannot launch")
     }
 
     // --- 4G ---
@@ -629,11 +706,11 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
      *    must be connectable). This does not identify external vs integrated
      *    cellular hardware; it only proves the DUSS route is exposed.
      */
-    fun send4gActivationFrames() {
+    fun send4gActivationFrames(): Boolean {
         val hardwareLease = beginHardwareOp()
         if (hardwareLease == null) {
             log("Hardware busy — please wait for the current operation to finish.")
-            return
+            return false
         }
         update { copy(is4gBusy = true, busyProgress = 0f, fourGMessage = "") }
         log("Sending 4G activation frames...")
@@ -702,6 +779,7 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                 hardwareLease.close()
             }
         }
+        return true
     }
 
     /** Checks only whether the controller exposes the local 4G DUSS endpoint. */
@@ -740,10 +818,10 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
      *
      * @param on true for LED ON, false for LED OFF
      */
-    fun setLed(on: Boolean) {
-        if (_state.value.isLedBusy) {
+    fun setLed(on: Boolean): Boolean {
+        if (!ledOperationBusy.compareAndSet(false, true)) {
             log("LED busy — please wait.")
-            return
+            return false
         }
         update { copy(isLedBusy = true, ledStatus = if (on) "Turning LEDs on..." else "Turning LEDs off...") }
         log(if (on) "Turning LEDs on..." else "Turning LEDs off...")
@@ -779,17 +857,21 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                 }
 
                 if (anySuccess) {
-                    update { copy(isLedBusy = false, ledStatus = if (on) "ON" else "OFF") }
-                    log(if (on) "LEDs turned on" else "LEDs turned off")
+                    update { copy(ledStatus = if (on) "ON command sent" else "OFF command sent") }
+                    log(if (on) "LED ON command written; state not read back" else "LED OFF command written; state not read back")
                 } else {
-                    update { copy(isLedBusy = false, ledStatus = "Failed — is DJI Fly running?") }
+                    update { copy(ledStatus = "Failed — is DJI Fly running?") }
                     log("LED command failed — make sure DJI Fly is running with aircraft connected")
                 }
             } catch (e: Exception) {
                 log("LED error: ${e.message}")
-                update { copy(isLedBusy = false, ledStatus = "Error: ${e.message}") }
+                update { copy(ledStatus = "Error: ${e.message}") }
+            } finally {
+                ledOperationBusy.set(false)
+                update { copy(isLedBusy = false) }
             }
         }
+        return true
     }
 
     // --- Device Info ---
@@ -799,12 +881,12 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
      * firmware version via the GENERAL VersionInquiry command
      * (cmd_set=0, cmd_id=1). Uses sendAndReceive to capture the response.
      */
-    fun queryDeviceInfo() {
-        if (!isControllerReachable()) return
+    fun queryDeviceInfo(): Boolean {
+        if (!isControllerReachable()) return false
         val hardwareLease = beginHardwareOp()
         if (hardwareLease == null) {
             log("Hardware busy — please wait for the current operation to finish.")
-            return
+            return false
         }
 
         update { copy(isQueryingInfo = true) }
@@ -838,13 +920,14 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                 hardwareLease.close()
             }
         }
+        return true
     }
 
-    fun probeSerial() {
+    fun probeSerial(): Boolean {
         val hardwareLease = beginHardwareOp()
         if (hardwareLease == null) {
             log("Hardware busy — please wait for the current operation to finish.")
-            return
+            return false
         }
         log("Probing for aircraft serial...")
         runOnIO {
@@ -863,6 +946,7 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                 hardwareLease.close()
             }
         }
+        return true
     }
 
     // --- Updates ---
@@ -1079,6 +1163,266 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // --- LAN control API ---
+
+    private fun lanStatusJson(): String {
+        val current = _state.value
+        return LanJson.objectOf(
+            "ok" to true,
+            "app_version" to APP_VERSION,
+            "controller_model" to current.controllerModel,
+            "status" to current.status,
+            "message" to current.message,
+            "connected" to current.isConnected,
+            "fcc_enabled" to current.isFccEnabled,
+            "auto_fcc" to current.autoFcc,
+            "keepalive_running" to current.isKeepaliveRunning,
+            "hardware_busy" to current.isHardwareBusy,
+            "led_busy" to current.isLedBusy,
+            "led_status" to current.ledStatus,
+            "aircraft_serial" to current.aircraftSerial,
+            "device_info" to current.deviceInfo,
+            "four_g_message" to current.fourGMessage,
+            "update_available" to current.updateAvailable,
+            "update_downloading" to current.isDownloadingUpdate,
+            "update_progress" to current.updateDownloadProgress
+        )
+    }
+
+    private fun handleLanCommand(params: Map<String, String>): NetworkApiResponse {
+        val command = params["command"]?.trim()?.lowercase(Locale.US)
+            ?: return lanError(400, "missing_command")
+
+        if (command == "help") {
+            return NetworkApiResponse(
+                200,
+                LanJson.objectOf(
+                    "ok" to true,
+                    "commands" to LAN_COMMANDS,
+                    "raw_duml_parameters" to listOf(
+                        "sender (default 0x2a)",
+                        "dst",
+                        "cmd_set",
+                        "cmd_id",
+                        "cmd_type (default 0x40)",
+                        "payload (hex)",
+                        "port (default 40009)",
+                        "timeout_ms (duml_request)",
+                        "wrapper=true|false (duml_send only)"
+                    )
+                )
+            )
+        }
+
+        log("LAN command received: $command")
+        return try {
+            when (command) {
+                "ping" -> NetworkApiResponse(
+                    200,
+                    LanJson.objectOf("ok" to true, "command" to command, "reply" to "pong")
+                )
+                "connect" -> acceptedHardware(command) { connect() }
+                "fcc_enable" -> acceptedHardware(command, requireConnected = true) { enableFcc() }
+                "ce_restore" -> acceptedHardware(command, requireConnected = true) { disableFcc() }
+                "keepalive_start" -> accepted(command) { startKeepalive() }
+                "keepalive_stop" -> accepted(command) { stopKeepalive() }
+                "auto_fcc_on" -> accepted(command) {
+                    if (!_state.value.autoFcc) toggleAutoFcc()
+                }
+                "auto_fcc_off" -> accepted(command) {
+                    if (_state.value.autoFcc) toggleAutoFcc()
+                }
+                "led_on" -> acceptedBoolean(command, setLed(true), "led_busy")
+                "led_off" -> acceptedBoolean(command, setLed(false), "led_busy")
+                "device_info" -> acceptedHardware(command, requireConnected = true) { queryDeviceInfo() }
+                "serial_probe" -> acceptedHardware(command, requireConnected = true) { probeSerial() }
+                "four_g_probe" -> accepted(command) { probe4gEndpoint() }
+                "four_g_activate" -> acceptedHardware(command, requireConnected = true) { send4gActivationFrames() }
+                "update_check" -> accepted(command) { checkForUpdates(force = true) }
+                "update_download" -> when {
+                    _state.value.isDownloadingUpdate -> lanError(409, "update_download_busy")
+                    _state.value.updateInfo == null -> lanError(412, "update_not_checked")
+                    else -> accepted(command) { downloadUpdate() }
+                }
+                "launch_dji_fly" -> accepted(command) { launchDjiFly() }
+                "duml_send" -> handleLanDuml(params, expectResponse = false)
+                "duml_request" -> handleLanDuml(params, expectResponse = true)
+                else -> lanError(400, "unknown_command")
+            }
+        } catch (e: IllegalArgumentException) {
+            lanError(400, e.message ?: "invalid_parameters")
+        }
+    }
+
+    private fun accepted(command: String, action: () -> Unit): NetworkApiResponse {
+        action()
+        return NetworkApiResponse(
+            202,
+            LanJson.objectOf("ok" to true, "command" to command, "state" to "accepted")
+        )
+    }
+
+    private fun acceptedHardware(
+        command: String,
+        requireConnected: Boolean = false,
+        action: () -> Boolean
+    ): NetworkApiResponse {
+        if (requireConnected && !_state.value.isConnected) {
+            return lanError(412, "controller_not_connected")
+        }
+        return acceptedBoolean(command, action(), "hardware_busy")
+    }
+
+    private fun acceptedBoolean(command: String, accepted: Boolean, error: String): NetworkApiResponse =
+        if (accepted) {
+            NetworkApiResponse(
+                202,
+                LanJson.objectOf("ok" to true, "command" to command, "state" to "accepted")
+            )
+        } else {
+            lanError(409, error)
+        }
+
+    private fun handleLanDuml(
+        params: Map<String, String>,
+        expectResponse: Boolean
+    ): NetworkApiResponse {
+        val sender = LanCommandCodec.optionalByte(params, "sender", 0x2A)
+        val destination = LanCommandCodec.requiredByte(params, "dst")
+        val cmdSet = LanCommandCodec.requiredByte(params, "cmd_set")
+        val cmdId = LanCommandCodec.requiredByte(params, "cmd_id")
+        val cmdType = LanCommandCodec.optionalByte(params, "cmd_type", 0x40)
+        val payload = LanCommandCodec.optionalHex(params)
+        val port = LanCommandCodec.optionalPort(params)
+        val timeoutMs = LanCommandCodec.optionalTimeout(params)
+        val wrapper = LanCommandCodec.optionalBoolean(params, "wrapper")
+        require(!expectResponse || !wrapper) { "wrapped_response_not_supported" }
+
+        val request = DumlBuilder().buildFrame(
+            DumlFrame(
+                sender = sender,
+                cmdType = cmdType,
+                cmdSet = cmdSet,
+                cmdId = cmdId,
+                dst = destination,
+                payload = payload
+            )
+        )
+        val wireRequest = if (wrapper) Profiles.wrapFrame(request) else request
+        val requestHex = LanCommandCodec.bytesToHex(request)
+        val usesLedPort = port == DumlTransport.PORT_LED
+        val hardwareLease = if (usesLedPort) null else beginHardwareOp()
+        if (!usesLedPort && hardwareLease == null) return lanError(409, "hardware_busy")
+        if (usesLedPort && !ledOperationBusy.compareAndSet(false, true)) {
+            return lanError(409, "led_busy")
+        }
+        if (usesLedPort) update { copy(isLedBusy = true) }
+
+        val commandLabel = "%02x:%02x".format(Locale.US, cmdSet, cmdId)
+        log(
+            "LAN DUML ${if (expectResponse) "request" else "send"} $commandLabel " +
+                "dst=%02x port=$port payload=${LanCommandCodec.bytesToHex(payload)}"
+                    .format(Locale.US, destination)
+        )
+
+        return try {
+            if (!expectResponse) {
+                val sent = transport.sendFrame(wireRequest, readWindowMs = timeoutMs, port = port)
+                if (sent) {
+                    log("LAN DUML send $commandLabel completed")
+                    NetworkApiResponse(
+                        200,
+                        LanJson.objectOf(
+                            "ok" to true,
+                            "command" to "duml_send",
+                            "request_hex" to requestHex,
+                            "wire_hex" to LanCommandCodec.bytesToHex(wireRequest),
+                            "port" to port
+                        )
+                    )
+                } else {
+                    log("LAN DUML send $commandLabel failed")
+                    lanError(502, "send_failed", requestHex)
+                }
+            } else {
+                val startedAt = System.currentTimeMillis()
+                val exchange = transport.sendAndReceiveRaw(
+                    frame = request,
+                    readWindowMs = timeoutMs,
+                    port = port,
+                    autoDetectPort = false
+                )
+                val elapsedMs = System.currentTimeMillis() - startedAt
+                val responseHex = exchange.responseFrame?.let(LanCommandCodec::bytesToHex)
+                val responsePayload = exchange.validatedPayload
+
+                when {
+                    exchange.responseFrame == null -> {
+                        log("LAN DUML request $commandLabel timed out after ${elapsedMs}ms")
+                        NetworkApiResponse(
+                            504,
+                            LanJson.objectOf(
+                                "ok" to false,
+                                "command" to "duml_request",
+                                "error" to "no_response",
+                                "request_hex" to requestHex,
+                                "port" to port,
+                                "elapsed_ms" to elapsedMs
+                            )
+                        )
+                    }
+                    responsePayload == null -> {
+                        log("LAN DUML request $commandLabel returned an invalid response")
+                        NetworkApiResponse(
+                            502,
+                            LanJson.objectOf(
+                                "ok" to false,
+                                "command" to "duml_request",
+                                "error" to "response_validation_failed",
+                                "request_hex" to requestHex,
+                                "response_hex" to responseHex,
+                                "port" to port,
+                                "elapsed_ms" to elapsedMs
+                            )
+                        )
+                    }
+                    else -> {
+                        val payloadHex = LanCommandCodec.bytesToHex(responsePayload)
+                        log("LAN DUML response $commandLabel payload=$payloadHex")
+                        NetworkApiResponse(
+                            200,
+                            LanJson.objectOf(
+                                "ok" to true,
+                                "command" to "duml_request",
+                                "request_hex" to requestHex,
+                                "response_hex" to responseHex,
+                                "payload_hex" to payloadHex,
+                                "port" to port,
+                                "elapsed_ms" to elapsedMs
+                            )
+                        )
+                    }
+                }
+            }
+        } finally {
+            hardwareLease?.close()
+            if (usesLedPort) {
+                ledOperationBusy.set(false)
+                update { copy(isLedBusy = false) }
+            }
+        }
+    }
+
+    private fun lanError(code: Int, error: String, requestHex: String? = null): NetworkApiResponse =
+        NetworkApiResponse(
+            code,
+            if (requestHex == null) {
+                LanJson.objectOf("ok" to false, "error" to error)
+            } else {
+                LanJson.objectOf("ok" to false, "error" to error, "request_hex" to requestHex)
+            }
+        )
+
     // --- Helpers ---
 
     /** Returns true if the controller is connected, logs a hint if not. */
@@ -1165,7 +1509,7 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
         _state.update(block)
     }
 
-    /** Adds a timestamped entry to the activity log (most recent first, max 50). */
+    /** Adds a timestamped entry to the activity log (most recent first, max 200). */
     private fun log(message: String) {
         val time = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
         val entry = "[$time] $message"
@@ -1176,5 +1520,10 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
     /** Launches a coroutine on Dispatchers.IO for network operations. */
     private fun runOnIO(block: suspend () -> Unit): Job =
         viewModelScope.launch(Dispatchers.IO) { block() }
+
+    override fun onCleared() {
+        if (activeLanController === this) activeLanController = null
+        super.onCleared()
+    }
 
 }

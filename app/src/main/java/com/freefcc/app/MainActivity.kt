@@ -350,8 +350,9 @@ private fun FccPage(state: AppState, viewModel: FccViewModel) {
                     if (state.ledStatus.isNotEmpty()) {
                         Spacer(Modifier.height(6.dp))
                         Text(
-                            "Status: ${state.ledStatus}",
-                            color = if (state.ledStatus == "ON") Green else if (state.ledStatus == "OFF") TextGray else Amber,
+                            "Result: ${state.ledStatus}",
+                            color = if (state.ledStatus.startsWith("ON")) Green
+                            else if (state.ledStatus.startsWith("OFF")) TextGray else Amber,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Medium
                         )
@@ -530,9 +531,9 @@ private fun LogPage(state: AppState, viewModel: FccViewModel) {
                 Icon(Icons.Default.Wifi, null, tint = Cyan, modifier = Modifier.size(24.dp))
                 Spacer(Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("LAN Log Bridge", color = TextWhite, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                    Text("LAN Control Bridge", color = TextWhite, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                     Text(
-                        "Auto-discovery on private Wi-Fi · fixed protected endpoint",
+                        "Live status, commands and logs · private Wi-Fi",
                         color = TextGray,
                         fontSize = 11.sp
                     )
@@ -861,7 +862,7 @@ private fun SupportPage() {
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            "If it helped you out, consider buying me a coffee.\nIt helps cover server costs and keeps the project going.",
+            "If it helped you out, consider supporting development on Boosty.\nIt helps fund hardware testing and keeps the project going.",
             color = TextGray,
             fontSize = 13.sp,
             lineHeight = 20.sp,
@@ -869,17 +870,17 @@ private fun SupportPage() {
         )
         Spacer(Modifier.height(32.dp))
 
-        // Big Ko-fi button
+        // Boosty button (the Support page is currently hidden from navigation).
         Button(
             onClick = {
                 try {
-                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://ko-fi.com/freefcc")))
+                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://boosty.to/danusha/donate")))
                 } catch (_: Exception) {
                     // No browser installed (RC2 has no web browser)
                 }
             },
             colors = ButtonDefaults.buttonColors(
-                containerColor = Color(0xFFFF5E5B),
+                containerColor = Color(0xFFFF7143),
                 contentColor = Color.White
             ),
             shape = RoundedCornerShape(14.dp),
@@ -889,7 +890,7 @@ private fun SupportPage() {
         ) {
             Icon(Icons.Filled.Coffee, null, modifier = Modifier.size(22.dp))
             Spacer(Modifier.width(10.dp))
-            Text("Buy me a coffee", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            Text("Support on Boosty", fontWeight = FontWeight.Bold, fontSize = 16.sp)
         }
 
         Spacer(Modifier.height(14.dp))
@@ -926,7 +927,7 @@ private fun SupportPage() {
             Spacer(Modifier.height(12.dp))
             BodyText(
                 "FreeFCC sends DUML commands to your DJI controller to unlock FCC mode and enable 4G. " +
-                "It works fully offline with no server or license. " +
+                "It has no external licensing backend or tracking. " +
                 "The protocol is publicly documented in the dji-firmware-tools project.",
                 TextGray
             )

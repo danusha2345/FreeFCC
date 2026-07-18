@@ -31,6 +31,11 @@ data class DumlFrame(
     val payload: ByteArray
 )
 
+data class DumlRawExchange(
+    val responseFrame: ByteArray?,
+    val validatedPayload: ByteArray?
+)
+
 /**
  * Builds wire-format DUML frames from structured input.
  *
@@ -291,9 +296,28 @@ class DumlTransport {
      * @return response payload, or null if no response was received
      */
     fun sendAndReceive(frame: ByteArray, readWindowMs: Int = 500, port: Int = PORT): ByteArray? {
+        return sendAndReceiveRaw(frame, readWindowMs, port).validatedPayload
+    }
+
+    /** Sends one already-built frame to the exact requested port. */
+    fun sendFrame(frame: ByteArray, readWindowMs: Int = 80, port: Int = PORT): Boolean =
+        sendOneFrame(frame, readWindowMs, port)
+
+    /**
+     * Sends one request and retains both the raw response frame and the payload
+     * that passed strict DUML response validation. The LAN diagnostic API uses
+     * the raw frame to explain timeouts or routing/sequence mismatches without
+     * silently discarding the evidence.
+     */
+    fun sendAndReceiveRaw(
+        frame: ByteArray,
+        readWindowMs: Int = 500,
+        port: Int = PORT,
+        autoDetectPort: Boolean = true
+    ): DumlRawExchange {
         var socket: Socket? = null
         try {
-            val effectivePort = if (port == PORT) findWorkingPort() else port
+            val effectivePort = if (autoDetectPort && port == PORT) findWorkingPort() else port
             socket = Socket()
             socket.connect(InetSocketAddress(HOST, effectivePort), CONNECT_TIMEOUT_MS)
             socket.tcpNoDelay = true
@@ -302,27 +326,32 @@ class DumlTransport {
             socket.getOutputStream().apply { write(frame); flush() }
 
             val input = socket.getInputStream()
-            val header = readBytes(input, 11) ?: return null
+            val header = readBytes(input, 11) ?: return DumlRawExchange(null, null)
 
             // Guard against a short read returning fewer than 3 bytes —
             // indexing header[0..2] for magic/length would otherwise throw.
-            if (header.size < 3) return null
+            if (header.size < 3) return DumlRawExchange(header, null)
 
             // Verify magic byte before trusting the encoded length enough to read more
-            if (header[0] != 0x55.toByte()) return null
+            if (header[0] != 0x55.toByte()) return DumlRawExchange(header, null)
 
             // Extract total length from bytes 1-2 (11-bit LE) to know how much more to read
             val totalLength = (header[1].toInt() and 0xFF) or ((header[2].toInt() and 0x03) shl 8)
-            if (totalLength < 13 || totalLength > 1023) return null
+            if (totalLength < 13 || totalLength > 1023) return DumlRawExchange(header, null)
+            if (header.size < 11) return DumlRawExchange(header, null)
 
             // Read the rest (payload + 2 CRC bytes)
-            val remaining = readBytes(input, totalLength - 11) ?: return null
+            val remaining = readBytes(input, totalLength - 11)
+                ?: return DumlRawExchange(header, null)
             val response = header + remaining
 
-            return DumlBuilder.validateResponse(frame, response)
+            return DumlRawExchange(
+                responseFrame = response,
+                validatedPayload = DumlBuilder.validateResponse(frame, response)
+            )
 
         } catch (_: IOException) {
-            return null
+            return DumlRawExchange(null, null)
         } finally {
             try { socket?.close() } catch (_: IOException) {}
         }
@@ -528,7 +557,11 @@ class DumlTransport {
         val out = ByteArray(count)
         var read = 0
         while (read < count) {
-            val n = try { input.read(out, read, count - read) } catch (_: IOException) { return null }
+            val n = try {
+                input.read(out, read, count - read)
+            } catch (_: IOException) {
+                return if (read > 0) out.copyOf(read) else null
+            }
             if (n <= 0) return if (read > 0) out.copyOf(read) else null
             read += n
         }
