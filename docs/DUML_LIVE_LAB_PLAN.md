@@ -38,6 +38,19 @@ write evidence как будто это подтверждённый FCC, хот
 Полный inventory transports, command frequencies, payload evidence и privacy
 границы: [DUML_STREAM_MAP.md](DUML_STREAM_MAP.md).
 
+## Release evidence `1.5.17`
+
+| Проверка | Результат |
+|---|---|
+| Main | app commit `93d12ea7340226a1ac6c6a1809b88bc1e4607a0d` запушен в `origin/main`; tag `v1.5.17` указывает на него |
+| Build | Локально: 80 JVM tests, `lintDebug`, `assembleDebug`, `assembleRelease`; GitHub Actions run `29698610828`: build, tests и lint успешно |
+| APK metadata | package `com.freefcc.app`, versionCode `34`, versionName `1.5.17`, APK Signature Scheme v3 |
+| Совместимость подписи | Certificate SHA-256 совпадает с предыдущим установленным релизом: `1e50efc760a23d71f5ec57f855af4b8c42c21fea6da9122889d59b3b23b890ce` |
+| Release artifact | `FreeFCC-1.5.17.apk`, локальный и повторно скачанный SHA-256 `7a7c8135f29e029abcc0b5c34b9c77a103d0868e56e52af53a320fac54cb24f1` |
+| Release | <https://github.com/danusha2345/FreeFCC/releases/tag/v1.5.17>; GitHub `releases/latest` возвращает `v1.5.17` и этот APK |
+| RC2 update | PENDING: controller не виден через ADB, прежний LAN endpoint `192.168.1.139:8787` недоступен; требуется обновление кнопкой в приложении |
+| Auto-FCC runtime | PENDING: Auto-FCC OFF re-entry без monitor/link drops; затем fresh Home Point transition, один full apply и остановка listener |
+
 ## Outdoor evidence: Home Point сбрасывает ранний FCC
 
 | Наблюдение | Уровень | Вывод |
