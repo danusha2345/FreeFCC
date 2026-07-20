@@ -81,16 +81,18 @@ The captured 4G profile is experimental and was derived from systems using exter
 Validated upstream on DJI RC2 firmware v10.00.0700; this fork was additionally exercised live on RC2 `rc331`. Future firmware can change the local proxy or DUML routing, so compatibility must be rechecked rather than assumed.
 
 The former two-second FCC keepalive is no longer used. After a successful
-**Connect**, FreeFCC opens one read-only port-`40007` listener and sends no
-primer, query, or refresh frames. Its incremental parser accepts CRC-valid
-passive `03:44` from both direct DUML and the `55 cc 30 75` envelope. The push
-reports the current Home Point state; when it is recorded, FreeFCC closes the
-listener, waits two seconds for regional initialization to settle, rebuilds the
-complete 21-frame × 2-round profile, and sends it on the exact DUML port found
-by **Connect**. A prior `not recorded` state is not required.
-If an established stream disconnects after reporting `not recorded`, one
-bounded recovery is permitted; otherwise disconnects stop fail-closed, so there
-is no disruptive reconnect loop.
+**Connect**, FreeFCC opens one read-only model-selected listener: RC Pro 2
+(`rc520`) uses the exact port pinned by Connect, while the currently validated
+RC2 path uses `40007`. The listener sends no primer, query, or refresh frames.
+Its incremental parser accepts CRC-valid passive `03:44` from both direct DUML
+and the `55 cc 30 75` envelope. The push reports the current Home Point state;
+when it is recorded, FreeFCC closes the listener, waits two seconds for regional
+initialization to settle, rebuilds the complete 21-frame × 2-round profile, and
+sends it on the exact DUML port found by **Connect**. A prior `not recorded`
+state is not required. If the telemetry stream closes before Home Point, the
+listener retries after five seconds and continues until Home Point or explicit
+cancellation; same-port sessions are serialized so LAN diagnostics and FCC
+writes cannot overlap it.
 
 If you test it on a model or firmware version not listed here, please [open an issue](https://github.com/danusha2345/FreeFCC/issues) and let me know.
 
@@ -143,7 +145,7 @@ Swipe from the right edge to open ATV Launcher. Open the Files app, find your fo
 4. For 4G diagnostics, tap **Probe 4G Endpoint** first. This is read-only and only checks whether `/duss/mb/0x205` is reachable. **Send 4G Activation Frames** remains experimental and confirms writes only, not activation.
    > **Note:** The integrated eSIM path on DJI Avata 360 is not yet proven compatible with the captured external-module profile. Please attach the LAN logs to an [issue](https://github.com/danusha2345/FreeFCC/issues) when testing.
 5. To request CE restore, tap **Send CE Restore**. The app confirms transport writes only; verify the actual RF mode in DJI Fly.
-6. The LED card verifies state after **LED ON** or **LED OFF**. Use refresh for an on-demand read.
+6. The LED card reads state once after **Connect**, verifies it again after **LED ON** or **LED OFF**, and supports an on-demand refresh.
 7. The **Info** tab lets you query the controller's hardware and firmware version
 8. The **Log** tab starts the LAN diagnostic API by default. It uses unencrypted HTTP and a fixed shared password. A UDP beacon broadcasts only the controller IP and port across the current Wi-Fi subnet; it does not include the password, logs, or command payloads. Disable the bridge on untrusted Wi-Fi. See [LAN Control API](docs/LAN_CONTROL_API.md).
 
@@ -193,7 +195,7 @@ For FCC, CE, and request/response diagnostics, the app sends DUML commands to lo
 
 Each command is a small binary packet with a magic byte (`0x55`), routing fields, a payload, and two CRC checksums. Ordinary TCP commands use one packet per connection. LED commands use an outer wrapper on port `40007`; 4G uses one abstract Unix datagram socket for the complete frame burst.
 
-The LED card keeps physical state separate from write completion. Its refresh action, and every LED write, perform one wrapped read-only `03:F8` hash request and display `ON`, `OFF`, `PARTIAL`, or `UNKNOWN`. A missing or mismatched response never preserves the requested value as if it were verified. See [LAN Control API](docs/LAN_CONTROL_API.md#read-the-current-lamp-parameter-by-hash).
+The LED card keeps physical state separate from write completion. Connect, its refresh action, and every LED write perform one wrapped read-only `03:F8` hash request and display `ON`, `OFF`, `PARTIAL`, or `UNKNOWN`. A missing or mismatched response never preserves the requested value as if it were verified. See [LAN Control API](docs/LAN_CONTROL_API.md#read-the-current-lamp-parameter-by-hash).
 
 ### FCC Profile
 
@@ -219,7 +221,7 @@ The frame format is:
 - `dst = 238` (0xEE, OFDM_GROUND index 7)
 - `payload = 000000 + ASCII(aircraft_serial)`
 
-The aircraft identity is probed by listening on the detected DUML TCP port for telemetry data. The preferred format is a full `1581...` factory serial. If it is not found within the listen window, the app falls back to the 5-character model pattern `W[AM]xxx` (for example `WA341` or `WM630`). Both forms are accepted by the 4G flow; a short identity can be checked against the model allowlist, while a full factory serial proceeds to the socket pre-check. The last identity is cached for display, but serial-specific 4G sending requires it to be freshly observed in the current process so a previous aircraft's cached value is not reused blindly.
+The aircraft identity is probed by listening on the detected DUML TCP port for telemetry data. The preferred format is a full `1581...` factory serial. The parser also recognizes the 16-character RC2 telemetry suffix beginning with `FA` for display and falls back to the 5-character model pattern `W[AM]xxx` (for example `WA341` or `WM630`). Only a full `1581...` serial or an allowlisted `WA/WM` model code is accepted by the 4G flow; the standalone `FA...` suffix is deliberately display-only because fabricating the missing prefix would be unsafe. The last identity is cached for display, but serial-specific 4G sending requires it to be freshly observed in the current process so a previous aircraft's cached value is not reused blindly.
 
 The `/duss/mb/0x205` pre-check proves only local route availability. It does not distinguish an external Cellular Dongle from an integrated eSIM module and does not validate model-specific payload semantics.
 
@@ -265,6 +267,7 @@ app/src/main/
     led_off.json       1 frame, LED off (port 40007)
   java/com/freefcc/app/
     DumlTransport.kt  Frame builder, incremental parser + bounded socket I/O
+    DumlPortSessionLock.kt Per-port exclusion for localhost DUML sessions
     FccRuntime.kt      Process-local FCC write and monitor runtime evidence
     HomePointMonitor.kt One-connection direct/wrapped 03:44 listener
     LedReadback.kt      Strict 03:F8 lamp-state decoding

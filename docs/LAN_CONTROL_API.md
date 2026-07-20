@@ -162,7 +162,10 @@ or `wire_exchange`) may run at a time; another returns `409 diagnostic_busy`.
 For request/response operations the hardware write gate is released immediately
 after `flush()`, while the response continues on the original socket. The Home
 Point listener and supported LED actions additionally share a process-wide
-port-`40007` lease and never open concurrent sessions there.
+port-`40007` lease. Every long-lived localhost operation also owns a lease for
+its exact DUML port, so diagnostics never overlap Home Point monitoring or an
+FCC/CE write on the same proxy. A conflicting request returns
+`409 duml_port_busy`.
 
 ## Exact raw wire exchange
 

@@ -38,12 +38,6 @@ internal object BootstrapRetryPolicy {
         result == BootstrapApplyResult.PRE_WRITE_CONNECT_FAILED
 }
 
-internal enum class AutoFccServiceStartResult {
-    DISABLED,
-    STARTED,
-    REASSERTED
-}
-
 /**
  * Foreground service that waits for the aircraft to record Home Point, applies
  * the complete FCC profile once, then stops. It runs independently of the
@@ -67,7 +61,6 @@ class FccKeepaliveService : Service() {
         internal const val POST_HOME_POINT_SETTLE_DELAY_MS = 2_000L
         private const val APPLY_CONNECT_RETRY_DELAY_MS = 5_000L
         private const val PREFS_NAME = "freefcc"
-        private const val PREF_AUTO_FCC = "auto_fcc"
         private const val PREF_KEEPALIVE = "keepalive_running"
         private val requestGate = AutoFccRequestGate()
 
@@ -101,20 +94,6 @@ class FccKeepaliveService : Service() {
             return !hadPersistentRequest
         }
 
-        /** Atomically rejects a late auto-start after the user toggled Auto-FCC off. */
-        @Synchronized
-        internal fun startAutoIfEnabled(context: Context): AutoFccServiceStartResult {
-            val preferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            if (!preferences.getBoolean(PREF_AUTO_FCC, false)) {
-                return AutoFccServiceStartResult.DISABLED
-            }
-            return if (start(context)) {
-                AutoFccServiceStartResult.STARTED
-            } else {
-                AutoFccServiceStartResult.REASSERTED
-            }
-        }
-
         @Synchronized
         fun stop(context: Context) {
             // Set this before posting ACTION_STOP. The service intent is
@@ -143,14 +122,6 @@ class FccKeepaliveService : Service() {
         fun isRunningFlagSet(context: Context): Boolean =
             context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .getBoolean(PREF_KEEPALIVE, false)
-
-        internal fun isPersistentAutoRequest(context: Context): Boolean {
-            val preferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            return PersistentAutoFccRecoveryPolicy.shouldRestoreService(
-                autoEnabled = preferences.getBoolean(PREF_AUTO_FCC, false),
-                inFlightMarker = preferences.getBoolean(PREF_KEEPALIVE, false)
-            )
-        }
 
         internal fun requiresImmediateForeground(action: String?): Boolean =
             action == ACTION_START
@@ -290,7 +261,7 @@ class FccKeepaliveService : Service() {
             val allowRelayedAppRoute = controllerModel.equals("rc520", ignoreCase = true) &&
                 monitorPort != DumlTransport.PORT_LED
             FccViewModel.logServiceEvent(
-                "AUTO FCC: Home Point listener using port $monitorPort on $controllerModel"
+                "HOME POINT FCC: listener using port $monitorPort on $controllerModel"
             )
             var homePointRecorded = false
             var initialConnectAttempts = 0
@@ -298,12 +269,19 @@ class FccKeepaliveService : Service() {
             var monitorConnectionOrdinal = 0
             var monitorFailure: String? = null
             while (requestGate.isCurrent(generation) && !homePointRecorded) {
-                if (Port40007Lock.shouldYieldToLed()) {
+                val usesLedPort = monitorPort == DumlTransport.PORT_LED
+                if (usesLedPort && Port40007Lock.shouldYieldToLed()) {
                     delay(25)
                     continue
                 }
-                val portLease = Port40007Lock.tryBegin()
-                if (portLease == null) {
+                val ledPortLease = if (usesLedPort) Port40007Lock.tryBegin() else null
+                if (usesLedPort && ledPortLease == null) {
+                    delay(250)
+                    continue
+                }
+                val sessionLease = DumlPortSessionLock.tryBegin(monitorPort)
+                if (sessionLease == null) {
+                    ledPortLease?.close()
                     delay(250)
                     continue
                 }
@@ -315,10 +293,11 @@ class FccKeepaliveService : Service() {
                     ).waitUntilRecorded(homePointSession) {
                         requestGate.isCurrent(generation) &&
                             workerJob?.isActive != false &&
-                            !Port40007Lock.shouldYieldToLed()
+                            (!usesLedPort || !Port40007Lock.shouldYieldToLed())
                     }
                 } finally {
-                    portLease.close()
+                    sessionLease.close()
+                    ledPortLease?.close()
                 }
                 if (waitResult == HomePointWaitResult.CONNECT_FAILED) {
                     initialConnectAttempts++
@@ -362,7 +341,11 @@ class FccKeepaliveService : Service() {
                     }
                     HomePointWaitDecision.COOPERATIVE_STOP -> {
                         if (!requestGate.isCurrent(generation) || workerJob?.isActive == false) return@launch
-                        while (requestGate.isCurrent(generation) && Port40007Lock.shouldYieldToLed()) {
+                        while (
+                            usesLedPort &&
+                            requestGate.isCurrent(generation) &&
+                            Port40007Lock.shouldYieldToLed()
+                        ) {
                             delay(25)
                         }
                     }
@@ -384,7 +367,7 @@ class FccKeepaliveService : Service() {
 
             val homePointObservedAtMs = System.currentTimeMillis()
             FccViewModel.logServiceEvent(
-                "AUTO FCC: Home Point=true observed; settling ${POST_HOME_POINT_SETTLE_DELAY_MS / 1_000}s"
+                "HOME POINT FCC: Home Point=true observed; settling ${POST_HOME_POINT_SETTLE_DELAY_MS / 1_000}s"
             )
             delay(POST_HOME_POINT_SETTLE_DELAY_MS)
             if (!requestGate.isCurrent(generation)) return@launch
@@ -392,14 +375,14 @@ class FccKeepaliveService : Service() {
             val pinnedPort = FccRuntime.tracker.state.value.controllerPort
             if (pinnedPort == null) {
                 FccViewModel.logServiceEvent(
-                    "AUTO FCC: stopped before write — Connect did not provide a pinned DUML port"
+                    "HOME POINT FCC: stopped before write — Connect did not provide a pinned DUML port"
                 )
                 synchronized(Companion) {
                     if (!requestGate.complete(generation)) return@synchronized
                     getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                         .edit().putBoolean(PREF_KEEPALIVE, false).apply()
                     stopForeground(STOP_FOREGROUND_REMOVE)
-                    FccRuntime.tracker.serviceFailed("AUTO FCC has no pinned Connect port")
+                    FccRuntime.tracker.serviceFailed("Home Point FCC has no pinned Connect port")
                     stopSelfResult(latestStartId)
                 }
                 return@launch
@@ -408,7 +391,7 @@ class FccKeepaliveService : Service() {
             val bootstrapProfile = try {
                 Profiles.load(this@FccKeepaliveService, "fcc.json")
             } catch (e: Exception) {
-                FccViewModel.logServiceEvent("AUTO FCC: fresh profile load failed: ${e.message}")
+                FccViewModel.logServiceEvent("HOME POINT FCC: fresh profile load failed: ${e.message}")
                 synchronized(Companion) {
                     if (!requestGate.complete(generation)) return@synchronized
                     getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -423,11 +406,25 @@ class FccKeepaliveService : Service() {
             var finalReport: BootstrapApplyReport? = null
             while (requestGate.isCurrent(generation) && finalReport == null) {
                 var hardwareLease: HardwareLock.Lease? = null
-                while (requestGate.isCurrent(generation) && hardwareLease == null) {
+                var sessionLease: DumlPortSessionLock.Lease? = null
+                while (requestGate.isCurrent(generation) && sessionLease == null) {
                     hardwareLease = HardwareLock.tryBegin()
-                    if (hardwareLease == null) delay(200)
+                    if (hardwareLease == null) {
+                        delay(200)
+                        continue
+                    }
+                    sessionLease = DumlPortSessionLock.tryBegin(pinnedPort)
+                    if (sessionLease == null) {
+                        hardwareLease.close()
+                        hardwareLease = null
+                        delay(200)
+                    }
                 }
-                if (!requestGate.isCurrent(generation) || hardwareLease == null) return@launch
+                if (!requestGate.isCurrent(generation) || hardwareLease == null || sessionLease == null) {
+                    sessionLease?.close()
+                    hardwareLease?.close()
+                    return@launch
+                }
 
                 val expectedWrites = bootstrapProfile.frames.size * bootstrapProfile.rounds
                 val runtimeAttempt = FccRuntime.tracker.beginApply(
@@ -437,14 +434,14 @@ class FccKeepaliveService : Service() {
                     homePointObservedAtMs = homePointObservedAtMs
                 )
                 FccViewModel.logServiceEvent(
-                    "AUTO FCC: applying $expectedWrites writes on pinned port $pinnedPort"
+                    "HOME POINT FCC: applying $expectedWrites writes on pinned port $pinnedPort"
                 )
                 val report = try {
                     sendBootstrapProfile(bootstrapProfile, generation, pinnedPort)
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    FccViewModel.logServiceEvent("AUTO FCC: apply error: ${e.message}")
+                    FccViewModel.logServiceEvent("HOME POINT FCC: apply error: ${e.message}")
                     BootstrapApplyReport(
                         result = BootstrapApplyResult.PARTIAL_FAILURE,
                         port = pinnedPort,
@@ -453,6 +450,7 @@ class FccKeepaliveService : Service() {
                         matchingAcks = 0
                     )
                 } finally {
+                    sessionLease.close()
                     hardwareLease.close()
                 }
 
@@ -469,7 +467,7 @@ class FccKeepaliveService : Service() {
                     outcome = outcome
                 )
                 FccViewModel.logServiceEvent(
-                    "AUTO FCC: ${report.result} on port ${report.port}; " +
+                    "HOME POINT FCC: ${report.result} on port ${report.port}; " +
                         "writes=${report.flushedWrites}/${report.expectedWrites}, " +
                         "matching_acks=${report.matchingAcks}; RF state unknown"
                 )

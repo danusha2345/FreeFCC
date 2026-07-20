@@ -18,6 +18,25 @@ import java.util.concurrent.atomic.AtomicReference
 class DumlTransportTest {
 
     @Test
+    fun aircraftIdentityExtractorPrefersFullSerialAndAcceptsRc2Suffix() {
+        assertEquals(
+            "1581FA8JC264600B31QZ",
+            DumlTransport.extractAircraftIdentity("noise\u00001581FA8JC264600B31QZ\u0000WA341")
+        )
+        assertEquals(
+            "FA8JC264600B31QZ",
+            DumlTransport.extractAircraftIdentity("\u0001FA8JC264600B31QZ\u0002")
+        )
+        assertEquals("WA341", DumlTransport.extractAircraftIdentity("\u0000WA341\u0000"))
+    }
+
+    @Test
+    fun aircraftIdentityExtractorRejectsEmbeddedOrMalformedCandidates() {
+        assertNull(DumlTransport.extractAircraftIdentity("XFA8JC264600B31QZY"))
+        assertNull(DumlTransport.extractAircraftIdentity("WA34"))
+    }
+
+    @Test
     fun emptyProfileIsFailure() {
         val success = DumlTransport().sendFrames(
             frames = emptyList(),

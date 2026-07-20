@@ -564,25 +564,21 @@ class DumlTransport {
      * check the length of the returned string.
      *
      * @param timeoutMs how long to listen for broadcasts (default 1500ms)
+     * @param port exact controller port when already known; null keeps discovery
      * @return the serial string (empty if nothing matched within the window)
      */
-    fun probeSerial(timeoutMs: Int = 1500): String {
-        // Try the full aircraft serial pattern first (1581 + 12-18 uppercase alphanumeric chars).
-        val result = listenForSerial(Regex("1581[0-9A-Z]{12,18}"), timeoutMs)
-        if (result.isNotEmpty()) return result
-
-        // Fallback: try the model code pattern (W[AM]xxx — e.g. WA341, WM630).
-        return listenForSerial(Regex("W[AM][0-9]{3}"), timeoutMs)
+    fun probeSerial(timeoutMs: Int = 1500, port: Int? = null): String {
+        return listenForSerial(timeoutMs, port)
     }
 
     /**
      * Opens a TCP socket to the DUML proxy and listens for data
      * matching the given regex pattern.
      */
-    private fun listenForSerial(pattern: Regex, timeoutMs: Int): String {
+    private fun listenForSerial(timeoutMs: Int, requestedPort: Int?): String {
         var socket: Socket? = null
         try {
-            val port = findWorkingPort()
+            val port = requestedPort ?: findWorkingPort()
             socket = Socket()
             socket.connect(InetSocketAddress(HOST, port), CONNECT_TIMEOUT_MS)
             socket.soTimeout = 200
@@ -600,7 +596,10 @@ class DumlTransport {
                         // telemetry is binary and UTF-8 decoding corrupts
                         // byte sequences that look like multi-byte chars.
                         buffer.append(String(buf, 0, n, Charsets.ISO_8859_1))
-                        pattern.find(buffer.toString())?.let { return it.value }
+                        extractAircraftIdentity(buffer)?.let { return it }
+                        if (buffer.length > SERIAL_SCAN_BUFFER_LIMIT) {
+                            buffer.delete(0, buffer.length - SERIAL_SCAN_OVERLAP)
+                        }
                     }
                 } catch (_: IOException) { /* read timeout — keep trying */ }
             }
@@ -883,6 +882,19 @@ class DumlTransport {
         private const val STREAM_READ_TIMEOUT_MS = 250
         private const val STREAM_READ_BUFFER_SIZE = 4096
         private const val PARTIAL_TAIL_LIMIT = 4096
+        private const val SERIAL_SCAN_BUFFER_LIMIT = 65_536
+        private const val SERIAL_SCAN_OVERLAP = 4_096
+        private val FULL_SERIAL_REGEX = Regex("(?<![0-9A-Z])1581[0-9A-Z]{12,18}(?![0-9A-Z])")
+        private val RC2_SERIAL_SUFFIX_REGEX = Regex("(?<![0-9A-Z])FA[0-9A-Z]{14}(?![0-9A-Z])")
+        private val MODEL_CODE_REGEX = Regex("(?<![0-9A-Z])W[AM][0-9]{3}(?![0-9A-Z])")
+
+        /** Extracts the safest known identity forms from a binary telemetry window. */
+        internal fun extractAircraftIdentity(buffer: CharSequence): String? {
+            val text = buffer.toString()
+            return FULL_SERIAL_REGEX.find(text)?.value
+                ?: RC2_SERIAL_SUFFIX_REGEX.find(text)?.value
+                ?: MODEL_CODE_REGEX.find(text)?.value
+        }
     }
 
     /** Reused read buffer for ACK reads — avoids a per-frame allocation. */
