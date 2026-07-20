@@ -40,7 +40,7 @@ Home Point transition. Ручной `Re-Send FCC Request` после Home Point 
 повторный разрыв снова завершается fail-closed. Live-retest `1.5.18` снова
 завершился до FCC write: monitor был запрошен раньше UI probe и запуска DJI Fly,
 а после Home Point статус показал terminal stream disconnect и
-`fcc_sequence_written=false`. В hardware-test candidate `1.5.19` Auto-FCC не
+`fcc_sequence_written=false`. В опубликованном hardware-test release `1.5.19` Auto-FCC не
 делает startup serial/LED probes, запускает DJI Fly и ждёт фактический
 `MainActivity.onStop()` перед service start. Поздний start после OFF блокируется
 атомарно; terminal failure показывает `connection/armed/recovery`.
@@ -48,7 +48,7 @@ Home Point transition. Ручной `Re-Send FCC Request` после Home Point 
 Полный inventory transports, command frequencies, payload evidence и privacy
 границы: [DUML_STREAM_MAP.md](DUML_STREAM_MAP.md).
 
-## Hardware-test candidate `1.5.19`
+## Release evidence `1.5.19`
 
 | Проверка | Результат |
 |---|---|
@@ -56,9 +56,14 @@ Home Point transition. Ручной `Re-Send FCC Request` после Home Point 
 | Startup ordering | Cold UI: successful DJI launch → `MainActivity.onStop` → atomic monitor start; background LAN: immediate atomic start; existing live monitor: reassert без UI/LED yield |
 | Race guards | OFF очищает pending handoff и атомарно сериализован с start; startup LED gate запрещает новые и delayed reads при Auto-FCC |
 | Diagnostics | Terminal failure включает `connection`, `armed`, `recovery` |
-| Local gate | 90 JVM tests, `lintDebug`, `assembleDebug`, `git diff --check` — успешно |
+| Main | app commit `a8c5e68fe0685f059de4c97301f5baac604c55f2` запушен в `origin/main`; tag `v1.5.19` указывает на него |
+| Build | Clean local gate: 90 JVM tests, `lintDebug`, `assembleDebug`, `assembleRelease`; GitHub Actions run `29748216913` для exact SHA — успешно |
+| APK metadata | package `com.freefcc.app`, versionCode `36`, versionName `1.5.19`, APK Signature Scheme v3 |
+| Совместимость подписи | Certificate SHA-256 совпадает с установленными релизами: `1e50efc760a23d71f5ec57f855af4b8c42c21fea6da9122889d59b3b23b890ce` |
+| Release artifact | `FreeFCC-1.5.19.apk`, size `19524878`; локальный и повторно скачанный SHA-256 `a6c1be55570274afd7d23301bf2653c5c4638ebee55eecd218bc4f439060bf0d` |
+| Release | <https://github.com/danusha2345/FreeFCC/releases/tag/v1.5.19>; GitHub `releases/latest` возвращает `v1.5.19` и этот APK |
 | Independent review | Два агента: GO для experimental hardware release; стабильный verdict требует live RC2 test без ручного resend |
-| RC2 update / runtime | PENDING после публикации `v1.5.19` |
+| RC2 update / runtime | PENDING: обновление кнопкой в приложении и fresh Home Point без ручного resend |
 
 ## Release evidence `1.5.18`
 
