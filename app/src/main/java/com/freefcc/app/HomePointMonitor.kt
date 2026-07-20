@@ -61,7 +61,7 @@ internal object HomePointProtocol {
     }
 }
 
-/** Parses the outer 40007 envelope without opening additional connections. */
+/** Parses CRC-valid DUML from either a direct stream or the 40007 envelope. */
 internal class WrappedDumlFrameParser {
     private var pending = ByteArray(0)
 
@@ -73,46 +73,60 @@ internal class WrappedDumlFrameParser {
         pending = combined
 
         val frames = mutableListOf<ByteArray>()
-        while (pending.size >= 8) {
-            val magic = findOuterMagic(pending)
-            if (magic < 0) {
-                pending = pending.takeLast(3).toByteArray()
+        while (pending.size >= 4) {
+            val marker = pending.indexOfFirst { it == 0x55.toByte() }
+            if (marker < 0) {
+                pending = ByteArray(0)
                 break
             }
-            if (magic > 0) pending = pending.copyOfRange(magic, pending.size)
-            if (pending.size < 8) break
+            if (marker > 0) pending = pending.copyOfRange(marker, pending.size)
 
-            val innerLength = (pending[4].toInt() and 0xFF) or
-                ((pending[5].toInt() and 0xFF) shl 8) or
-                ((pending[6].toInt() and 0xFF) shl 16) or
-                ((pending[7].toInt() and 0xFF) shl 24)
-            if (innerLength !in 13..1023) {
+            if (hasOuterMagic(pending)) {
+                if (pending.size < 8) break
+                val innerLength = (pending[4].toInt() and 0xFF) or
+                    ((pending[5].toInt() and 0xFF) shl 8) or
+                    ((pending[6].toInt() and 0xFF) shl 16) or
+                    ((pending[7].toInt() and 0xFF) shl 24)
+                if (innerLength !in 13..1023) {
+                    pending = pending.copyOfRange(1, pending.size)
+                    continue
+                }
+                val outerLength = 8 + innerLength
+                if (pending.size < outerLength) break
+                val candidate = pending.copyOfRange(8, outerLength)
+                if (!isValidDuml(candidate)) {
+                    pending = pending.copyOfRange(1, pending.size)
+                    continue
+                }
+                frames += candidate
+                pending = pending.copyOfRange(outerLength, pending.size)
+                continue
+            }
+
+            val directLength = (pending[1].toInt() and 0xFF) or
+                ((pending[2].toInt() and 0x03) shl 8)
+            if (directLength !in 13..1023) {
                 pending = pending.copyOfRange(1, pending.size)
                 continue
             }
-            val outerLength = 8 + innerLength
-            if (pending.size < outerLength) break
-            val candidate = pending.copyOfRange(8, outerLength)
+            if (pending.size < directLength) break
+            val candidate = pending.copyOfRange(0, directLength)
             if (!isValidDuml(candidate)) {
                 pending = pending.copyOfRange(1, pending.size)
                 continue
             }
             frames += candidate
-            pending = pending.copyOfRange(outerLength, pending.size)
+            pending = pending.copyOfRange(directLength, pending.size)
         }
         return frames
     }
 
-    private fun findOuterMagic(bytes: ByteArray): Int {
-        for (index in 0..bytes.size - 4) {
-            if (bytes[index] == 0x55.toByte() &&
-                bytes[index + 1] == 0xCC.toByte() &&
-                bytes[index + 2] == 0x30.toByte() &&
-                bytes[index + 3] == 0x75.toByte()
-            ) return index
-        }
-        return -1
-    }
+    private fun hasOuterMagic(bytes: ByteArray): Boolean =
+        bytes.size >= 4 &&
+            bytes[0] == 0x55.toByte() &&
+            bytes[1] == 0xCC.toByte() &&
+            bytes[2] == 0x30.toByte() &&
+            bytes[3] == 0x75.toByte()
 
     private fun isValidDuml(frame: ByteArray): Boolean {
         if (frame.size < 13 || frame[0] != 0x55.toByte()) return false

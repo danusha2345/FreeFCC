@@ -28,7 +28,7 @@ GPS level `0 → 2 → 4 → 5`. Это прямое live-подтвержден
 | Port | Что реально видно | Назначение |
 |---|---|---|
 | `40009` | Небольшой direct DUML broker stream к App instance `0x82`: в основном RC frames | FCC writes, request/response experiments, controller identity telemetry |
-| `40007` | Outer envelope `55 cc 30 75 + u32 LE length + inner DUML`; широкий component→App telemetry bus | Flight/GPS/Home Point, camera, gimbal, RC, link и cellular/eSIM telemetry |
+| `40007` | Широкий component→App telemetry bus; observed tooling extracts inner DUML from both direct-compatible stream and envelope `55 cc 30 75 + u32 LE length + inner DUML` | Flight/GPS/Home Point, camera, gimbal, RC, link и cellular/eSIM telemetry |
 
 Каждый внутренний frame в статистике ниже проверен по encoded length, CRC-8 и
 CRC-16. Поэтому это не false-positive scan внутри arbitrary wrapper data.

@@ -14,6 +14,7 @@ class FccRuntimeTrackerTest {
 
         assertNull(tracker.state.value.lastSuccessfulWriteAtMs)
         assertNull(tracker.state.value.lastAttemptSucceeded)
+        assertFalse(tracker.state.value.controllerSessionEstablished)
         assertEquals(KeepaliveRuntimeStatus.STOPPED, tracker.state.value.keepaliveStatus)
     }
 
@@ -34,8 +35,51 @@ class FccRuntimeTrackerTest {
 
         tracker.beginHardwareSession()
 
+        assertTrue(tracker.state.value.controllerSessionEstablished)
         assertNull(tracker.state.value.lastSuccessfulWriteAtMs)
         assertNull(tracker.state.value.lastAttemptSucceeded)
+    }
+
+    @Test
+    fun monitorLifecyclePreservesExplicitControllerSession() {
+        val tracker = FccRuntimeTracker()
+        tracker.beginHardwareSession()
+
+        tracker.serviceStartRequested()
+        tracker.serviceRunning()
+        tracker.serviceFailed("short passive stream")
+        assertTrue(tracker.state.value.controllerSessionEstablished)
+
+        tracker.serviceStopped()
+        assertTrue(tracker.state.value.controllerSessionEstablished)
+    }
+
+    @Test
+    fun clearingWriteEvidenceDoesNotManufactureOrEraseConnection() {
+        val freshTracker = FccRuntimeTracker()
+        freshTracker.recordWrite(success = true, timestampMs = 1234L)
+        freshTracker.clearWriteEvidence()
+        assertFalse(freshTracker.state.value.controllerSessionEstablished)
+        assertNull(freshTracker.state.value.lastSuccessfulWriteAtMs)
+
+        val connectedTracker = FccRuntimeTracker()
+        connectedTracker.beginHardwareSession()
+        connectedTracker.recordWrite(success = true, timestampMs = 5678L)
+        connectedTracker.clearWriteEvidence()
+        assertTrue(connectedTracker.state.value.controllerSessionEstablished)
+        assertNull(connectedTracker.state.value.lastSuccessfulWriteAtMs)
+    }
+
+    @Test
+    fun failedExplicitProbeClearsOnlyControllerSessionEvidence() {
+        val tracker = FccRuntimeTracker()
+        tracker.beginHardwareSession()
+        tracker.recordWrite(success = true, timestampMs = 1234L)
+
+        tracker.controllerSessionLost()
+
+        assertFalse(tracker.state.value.controllerSessionEstablished)
+        assertEquals(1234L, tracker.state.value.lastSuccessfulWriteAtMs)
     }
 
     @Test

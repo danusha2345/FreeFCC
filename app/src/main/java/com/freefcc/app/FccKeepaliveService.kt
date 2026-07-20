@@ -40,7 +40,7 @@ internal enum class AutoFccServiceStartResult {
  * the complete FCC profile once, then stops. It runs independently of the
  * Activity lifecycle while the user is in DJI Fly.
  *
- * Home Point is read from the wrapped `03:44` stream through one long-lived
+ * Home Point is read from passive direct/wrapped `03:44` telemetry through one
  * port-40007 connection. No periodic FCC writes are performed.
  */
 class FccKeepaliveService : Service() {

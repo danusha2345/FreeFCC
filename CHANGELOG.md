@@ -1,5 +1,22 @@
 # История изменений
 
+## 1.5.24 — 2026-07-20
+
+- Home Point parser теперь принимает CRC-valid `03:44` и из прямого DUML
+  stream, и из envelope `55 cc 30 75`. Фрагментированные и смешанные потоки
+  покрыты тестами; listener по-прежнему не пишет primer/query/refresh.
+- Live `1.5.23` подтвердил короткий пассивный broker window: 19 валидных кадров
+  и clean EOF примерно за 2 секунды, при этом в конкретной выборке был `03:43`,
+  но не было `03:44`. EOF не считается потерей основного controller Connect.
+- Успешный explicit Connect хранится отдельно от lifecycle Home Point monitor.
+  После обычного закрытия и повторного входа в Activity состояние Connect
+  сохраняется в текущем процессе даже после FAILED/STOPPED monitor; реальный
+  неуспешный повторный controller probe очищает это состояние.
+- `clearWriteEvidence()` отделён от `beginHardwareSession()`: CE restore очищает
+  только доказательство FCC write и больше не может создать ложный Connect.
+- Периодический reconnect не добавлен: `03:43` отражает GPS readiness, но не
+  доказывает Home Point, а частые открытия `40007` требуют отдельного bench A/B.
+
 ## 1.5.23 — 2026-07-20
 
 - Home Point listener теперь полностью пассивный: один socket `40007`, ни

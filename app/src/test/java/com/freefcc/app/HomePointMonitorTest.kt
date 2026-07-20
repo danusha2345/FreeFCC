@@ -38,6 +38,34 @@ class HomePointMonitorTest {
     }
 
     @Test
+    fun detectsRecordedBitInFragmentedDirectStream() {
+        val before = homePointFrame(0x0046)
+        val after = homePointFrame(0x0047)
+        val parser = WrappedDumlFrameParser()
+        val wire = before + after
+
+        val frames = mutableListOf<ByteArray>()
+        frames += parser.feed(wire.copyOfRange(0, 3))
+        frames += parser.feed(wire.copyOfRange(3, 73))
+        frames += parser.feed(wire.copyOfRange(73, wire.size))
+
+        assertEquals(2, frames.size)
+        assertFalse(HomePointProtocol.isRecorded(frames[0])!!)
+        assertTrue(HomePointProtocol.isRecorded(frames[1])!!)
+    }
+
+    @Test
+    fun parsesMixedDirectAndWrappedFramesWithoutDuplicates() {
+        val direct = homePointFrame(0x0046)
+        val wrapped = Profiles.wrapFrame(homePointFrame(0x0047))
+        val frames = WrappedDumlFrameParser().feed(byteArrayOf(0x01, 0x02) + direct + wrapped)
+
+        assertEquals(2, frames.size)
+        assertFalse(HomePointProtocol.isRecorded(frames[0])!!)
+        assertTrue(HomePointProtocol.isRecorded(frames[1])!!)
+    }
+
+    @Test
     fun skipsCorruptOuterCandidateAndResynchronizes() {
         val corrupt = Profiles.wrapFrame(homePointFrame(0x0047)).also {
             it[it.lastIndex] = (it[it.lastIndex].toInt() xor 0x01).toByte()
@@ -87,6 +115,63 @@ class HomePointMonitorTest {
         thread.join(2_000)
         serverError.get()?.let { throw AssertionError("server failed", it) }
         assertEquals(HomePointWaitResult.RECORDED, result)
+    }
+
+    @Test
+    fun passiveMonitorAcceptsDirectTelemetryWithoutWriting() {
+        val server = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
+        val serverError = AtomicReference<Throwable>()
+        val clientWriteObserved = AtomicBoolean(false)
+        val thread = Thread {
+            try {
+                server.use { listener ->
+                    listener.accept().use { socket ->
+                        socket.soTimeout = 200
+                        try {
+                            clientWriteObserved.set(socket.getInputStream().read() >= 0)
+                        } catch (_: SocketTimeoutException) {
+                            // Expected: passive monitor never writes a primer.
+                        }
+                        socket.getOutputStream().apply {
+                            write(nonHomePointFrame())
+                            write(homePointFrame(0x0047))
+                            flush()
+                        }
+                    }
+                }
+            } catch (t: Throwable) {
+                serverError.set(t)
+            }
+        }
+        thread.start()
+
+        val result = HomePointMonitor(port = server.localPort).waitUntilRecorded { true }
+
+        thread.join(2_000)
+        serverError.get()?.let { throw AssertionError("server failed", it) }
+        assertEquals(HomePointWaitResult.RECORDED, result)
+        assertFalse(clientWriteObserved.get())
+    }
+
+    @Test
+    fun directNonHomePointTelemetryThenEofRemainsDisconnected() {
+        val server = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
+        val thread = Thread {
+            server.use { listener ->
+                listener.accept().use { socket ->
+                    socket.getOutputStream().apply {
+                        write(nonHomePointFrame())
+                        flush()
+                    }
+                }
+            }
+        }
+        thread.start()
+
+        val result = HomePointMonitor(port = server.localPort).waitUntilRecorded { true }
+
+        thread.join(2_000)
+        assertEquals(HomePointWaitResult.STREAM_DISCONNECTED, result)
     }
 
     @Test
@@ -363,5 +448,16 @@ class HomePointMonitorTest {
             )
         )
     }
+
+    private fun nonHomePointFrame(): ByteArray = DumlBuilder().buildFrame(
+        DumlFrame(
+            sender = 0x0E,
+            cmdType = 0x00,
+            cmdSet = 0x03,
+            cmdId = 0x43,
+            dst = 0x02,
+            payload = ByteArray(85)
+        )
+    )
 
 }

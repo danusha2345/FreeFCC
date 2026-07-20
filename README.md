@@ -82,9 +82,11 @@ Validated upstream on DJI RC2 firmware v10.00.0700; this fork was additionally e
 
 The former two-second FCC keepalive is no longer used. After a successful
 **Connect**, FreeFCC opens one read-only port-`40007` listener and sends no
-primer, query, or refresh frames. A CRC-valid passive `03:44` push reports the
-current Home Point state; when it is recorded, FreeFCC closes the listener and
-performs one complete FCC apply. A prior `not recorded` state is not required.
+primer, query, or refresh frames. Its incremental parser accepts CRC-valid
+passive `03:44` from both direct DUML and the `55 cc 30 75` envelope. The push
+reports the current Home Point state; when it is recorded, FreeFCC closes the
+listener and performs one complete FCC apply. A prior `not recorded` state is
+not required.
 If an established stream disconnects after reporting `not recorded`, one
 bounded recovery is permitted; otherwise disconnects stop fail-closed, so there
 is no disruptive reconnect loop.
@@ -263,7 +265,7 @@ app/src/main/
   java/com/freefcc/app/
     DumlTransport.kt  Frame builder, incremental parser + bounded socket I/O
     FccRuntime.kt      Process-local FCC write and monitor runtime evidence
-    HomePointMonitor.kt One-connection wrapped 03:44 listener
+    HomePointMonitor.kt One-connection direct/wrapped 03:44 listener
     LedReadback.kt      Strict 03:F8 lamp-state decoding
     FccKeepaliveService.kt Foreground Home Point wait + one full FCC apply
     LanControl.kt      LAN command validation and JSON encoding

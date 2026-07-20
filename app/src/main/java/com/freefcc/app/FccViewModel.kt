@@ -279,15 +279,29 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
             log("Cleared stale Home Point monitor marker")
         }
         update {
+            val connected = runtime.controllerSessionEstablished
+            val restoredStatus = resolveFccRuntimeStatus(
+                currentStatus = if (connected) "connected" else "disconnected",
+                isConnected = connected,
+                keepaliveStatus = runtime.keepaliveStatus,
+                hasWriteEvidence = runtime.lastSuccessfulWriteAtMs != null
+            )
             copy(
                 controllerModel = model,
-                status = if (liveMonitor) "connected" else "disconnected",
+                status = restoredStatus,
                 autoFcc = false,
-                isConnected = liveMonitor,
+                isConnected = connected,
                 isKeepaliveRunning = liveMonitor,
                 isFccEnabled = runtime.lastSuccessfulWriteAtMs != null,
                 fccLastWriteAtMs = runtime.lastSuccessfulWriteAtMs,
-                message = if (liveMonitor) "Waiting for current Home Point..." else ""
+                message = when {
+                    liveMonitor -> "Waiting for current Home Point..."
+                    runtime.keepaliveStatus == KeepaliveRuntimeStatus.FAILED ->
+                        runtime.error ?: "Home Point monitor failed. Tap Retry Home Point."
+                    runtime.lastSuccessfulWriteAtMs != null ->
+                        "FCC request was written — verify RF mode in DJI Fly"
+                    else -> ""
+                }
             )
         }
         log("FreeFCC v$APP_VERSION started on $model")
@@ -514,6 +528,7 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                     }
                     if (serial.isNotEmpty()) log("Aircraft serial: $serial")
                 } else {
+                    FccRuntime.tracker.controllerSessionLost()
                     update {
                         copy(
                             status = "disconnected",

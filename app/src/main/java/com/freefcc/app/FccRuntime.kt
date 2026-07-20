@@ -15,6 +15,7 @@ internal enum class KeepaliveRuntimeStatus {
 /** Process-local evidence. A successful write is not a physical FCC readback. */
 internal data class FccRuntimeSnapshot(
     val keepaliveStatus: KeepaliveRuntimeStatus = KeepaliveRuntimeStatus.STOPPED,
+    val controllerSessionEstablished: Boolean = false,
     val lastSuccessfulWriteAtMs: Long? = null,
     val lastAttemptSucceeded: Boolean? = null,
     val error: String? = null
@@ -80,11 +81,25 @@ internal class FccRuntimeTracker {
     /** Starts a newly detected controller session with no FCC-state assumption. */
     fun beginHardwareSession() {
         mutableState.update {
-            it.copy(lastSuccessfulWriteAtMs = null, lastAttemptSucceeded = null)
+            it.copy(
+                controllerSessionEstablished = true,
+                lastSuccessfulWriteAtMs = null,
+                lastAttemptSucceeded = null
+            )
         }
     }
 
-    fun clearWriteEvidence() = beginHardwareSession()
+    /** Records a failed explicit controller probe without altering FCC history. */
+    fun controllerSessionLost() {
+        mutableState.update { it.copy(controllerSessionEstablished = false) }
+    }
+
+    /** Clears FCC write evidence without manufacturing a controller connection. */
+    fun clearWriteEvidence() {
+        mutableState.update {
+            it.copy(lastSuccessfulWriteAtMs = null, lastAttemptSucceeded = null)
+        }
+    }
 }
 
 internal object FccRuntime {

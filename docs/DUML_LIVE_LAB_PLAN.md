@@ -90,6 +90,15 @@ frame. Один полностью пассивный socket без единог
 получил 128 валидных telemetry frames, включая два `03:44` payload 102 B с
 `home_state=0x0047`. Поэтому `1.5.23` удаляет primer и refresh полностью.
 
+Live `1.5.23` подтвердил, что explicit Connect остаётся успешным, но первый
+read-only `40007` stream может завершиться примерно через 2 секунды. Контрольный
+`duml_capture` получил 19 CRC-valid frames: `03:43` присутствовал, `03:44` в
+этом окне отсутствовал. Production parser при этом понимал только outer envelope,
+тогда как diagnostic scanner совместим и с direct DUML. `1.5.24` добавляет
+dual direct/wrapped incremental parsing и отделяет process-local controller
+session от terminal состояния monitor. Частый/unlimited reconnect не включён:
+сначала нужен live A/B одного исправленного пассивного сеанса без link drop.
+
 Полный inventory transports, command frequencies, payload evidence и privacy
 границы: [DUML_STREAM_MAP.md](DUML_STREAM_MAP.md).
 
