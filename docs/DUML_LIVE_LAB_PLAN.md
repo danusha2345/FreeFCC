@@ -102,6 +102,23 @@ session от terminal состояния monitor. Частый/unlimited reconne
 Полный inventory transports, command frequencies, payload evidence и privacy
 границы: [DUML_STREAM_MAP.md](DUML_STREAM_MAP.md).
 
+## Release candidate `1.5.25`
+
+Live `1.5.24` впервые достоверно обнаружил текущий `Home Point=true`, но
+автоматический path физически оставил радио в CE; последующий manual resend тем
+же полным профилем включил FCC. Старый runtime не записал, были ли в automatic
+реально отправлены все 42 кадра и какой порт выбрал новый service transport.
+
+`1.5.25` устраняет обе конкретные разницы: после Home Point выдерживает 2 s,
+строит свежий полный профиль и использует только порт явного Connect без
+fallback scan. LAN/process log сохраняет origin, Home Point/apply timestamps,
+порт, `flushed/expected` и matching ACK. Итоговый RF mode всё равно остаётся
+unknown до визуальной проверки или будущего подтверждённого getter.
+
+Следующий live-тест: открыть FreeFCC, нажать Connect при включённом и связанном
+aircraft, дождаться Home Point, затем проверить `fcc_auto_attempt_*` и
+фактический график Transmission без ручного resend.
+
 ## Release evidence `1.5.19`
 
 | Проверка | Результат |

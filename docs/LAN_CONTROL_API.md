@@ -67,7 +67,10 @@ update check return `412`.
 `fcc_enabled` in `/api/status` is always `null`: the localhost proxy does not
 provide a physical RF-region readback. `fcc_sequence_written` and
 `fcc_last_write_at_ms` describe only a successful profile write in the current
-app process. `home_point_monitor_running` is the observed one-shot listener
+app process. The `fcc_last_attempt_*` fields report origin, exact port,
+timestamps, expected/flushed writes and matching ACK count; the
+`fcc_auto_*` fields retain the last automatic Home Point attempt even after a
+manual retry. `home_point_monitor_running` is the observed one-shot listener
 lifecycle, while `home_point_monitor_requested` records an in-progress wait.
 The old `keepalive_*` fields remain as compatibility aliases.
 

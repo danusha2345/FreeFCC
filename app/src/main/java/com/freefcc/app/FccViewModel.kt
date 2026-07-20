@@ -193,6 +193,12 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                 while (processLogs.size > MAX_LOG_ENTRIES) processLogs.removeFirst()
             }
         }
+
+        /** Allows the foreground service to publish lifecycle evidence to LAN logs. */
+        internal fun logServiceEvent(message: String) {
+            val time = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
+            appendProcessLog("[$time] $message")
+        }
     }
 
     private val _state = MutableStateFlow(
@@ -501,9 +507,11 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                 }
                 if (transport.connect()) {
                     connected = true
-                    FccRuntime.tracker.beginHardwareSession()
-                    log("Controller connected")
                     val detectedPort = transport.getDetectedPort()
+                    FccRuntime.tracker.beginHardwareSession(
+                        detectedPort.takeIf { it > 0 } ?: DumlTransport.PORT
+                    )
+                    log("Controller connected")
                     if (detectedPort > 0) {
                         log("DUML port detected: $detectedPort")
                     }
@@ -570,7 +578,17 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
         runOnIO {
             try {
                 val profile = Profiles.load(app, "fcc.json")
-                log("Loaded FCC profile: ${profile.frames.size} frames, ${profile.rounds} rounds")
+                val expectedWrites = profile.frames.size * profile.rounds
+                val runtime = FccRuntime.tracker.state.value
+                val effectivePort = runtime.controllerPort
+                    ?: transport.getDetectedPort().takeIf { it > 0 }
+                    ?: profile.port
+                val attempt = FccRuntime.tracker.beginApply(
+                    origin = FccApplyOrigin.MANUAL,
+                    port = effectivePort,
+                    expectedWrites = expectedWrites
+                )
+                log("Loaded FCC profile: ${profile.frames.size} frames, ${profile.rounds} rounds, port $effectivePort")
 
                 val success = transport.sendFrames(
                     frames = profile.frames,
@@ -578,11 +596,21 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                     interFrameDelayMs = profile.interFrameDelay,
                     interRoundDelayMs = profile.interRoundDelay,
                     readWindowMs = profile.readWindowMs,
-                    port = profile.port
+                    port = effectivePort
                 ) { progress -> update { copy(busyProgress = progress) } }
 
+                FccRuntime.tracker.finishApply(
+                    startedAtMs = attempt.startedAtMs,
+                    flushedWrites = if (success) expectedWrites else 0,
+                    matchingAcks = null,
+                    outcome = if (success) {
+                        FccApplyOutcome.ALL_WRITES_FLUSHED
+                    } else {
+                        FccApplyOutcome.PARTIAL_WRITE_FAILURE
+                    }
+                )
+
                 if (success) {
-                    FccRuntime.tracker.recordWrite(true)
                     update {
                         copy(
                             status = "fcc_written",
@@ -595,7 +623,6 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                     }
                     log("FCC apply: all ${profile.frames.size * profile.rounds} frame writes completed; verify in DJI Fly")
                 } else {
-                    FccRuntime.tracker.recordWrite(false)
                     update {
                         copy(
                             status = "connected",
@@ -607,6 +634,16 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                     log("FCC apply failed — writes failed")
                 }
             } catch (e: Exception) {
+                FccRuntime.tracker.state.value.lastApplyAttempt
+                    ?.takeIf { it.origin == FccApplyOrigin.MANUAL && it.finishedAtMs == null }
+                    ?.let { attempt ->
+                        FccRuntime.tracker.finishApply(
+                            startedAtMs = attempt.startedAtMs,
+                            flushedWrites = attempt.flushedWrites,
+                            matchingAcks = attempt.matchingAcks,
+                            outcome = FccApplyOutcome.ERROR
+                        )
+                    }
                 log("FCC apply error: ${e.message}")
                 update { copy(status = "connected", message = "FCC apply error: ${e.message}", isBusy = false, busyProgress = 0f) }
             } finally {
@@ -1409,6 +1446,21 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
             "fcc_write_state" to if (current.isFccEnabled) "written_current_process" else "unknown",
             "fcc_last_write_at_ms" to current.fccLastWriteAtMs,
             "fcc_last_attempt_succeeded" to runtime.lastAttemptSucceeded,
+            "controller_duml_port" to runtime.controllerPort,
+            "fcc_last_attempt_origin" to runtime.lastApplyAttempt?.origin?.name?.lowercase(Locale.US),
+            "fcc_last_attempt_outcome" to runtime.lastApplyAttempt?.outcome?.name?.lowercase(Locale.US),
+            "fcc_last_attempt_port" to runtime.lastApplyAttempt?.port,
+            "fcc_last_attempt_expected_writes" to runtime.lastApplyAttempt?.expectedWrites,
+            "fcc_last_attempt_flushed_writes" to runtime.lastApplyAttempt?.flushedWrites,
+            "fcc_last_attempt_matching_acks" to runtime.lastApplyAttempt?.matchingAcks,
+            "fcc_last_attempt_started_at_ms" to runtime.lastApplyAttempt?.startedAtMs,
+            "fcc_last_attempt_finished_at_ms" to runtime.lastApplyAttempt?.finishedAtMs,
+            "fcc_auto_home_point_observed_at_ms" to runtime.lastAutomaticApplyAttempt?.homePointObservedAtMs,
+            "fcc_auto_attempt_outcome" to runtime.lastAutomaticApplyAttempt?.outcome?.name?.lowercase(Locale.US),
+            "fcc_auto_attempt_port" to runtime.lastAutomaticApplyAttempt?.port,
+            "fcc_auto_attempt_flushed_writes" to runtime.lastAutomaticApplyAttempt?.flushedWrites,
+            "fcc_auto_attempt_expected_writes" to runtime.lastAutomaticApplyAttempt?.expectedWrites,
+            "fcc_auto_attempt_matching_acks" to runtime.lastAutomaticApplyAttempt?.matchingAcks,
             "auto_fcc" to current.autoFcc,
             "keepalive_running" to current.isKeepaliveRunning,
             "keepalive_status" to runtime.keepaliveStatus.name.lowercase(Locale.US),

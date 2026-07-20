@@ -138,6 +138,13 @@ Indoor US-spoof подтвердил итоговый FCC после US Home Poi
 Mode CE/FCC Get` найден, но direct `40009` route не ответил и payload layout
 неизвестен. Пока физический FCC/CE проверяется в DJI Fly.
 
+Дополнительный corpus audit подтвердил, что `06:72 payload=00` — только
+ACK/status успеха, а не значение CE/FCC. Наблюдаемые `09:08`, `09:20`, `09:36`
+и `09:3A` относятся к quality/energy/link metrics. `09:21` и современный
+`09:43` остаются кандидатами только для синхронного помеченного CE↔FCC A/B.
+Важно: поле `i:39` в `fcc.json` десятичное и попадает на провод как
+`cmdId=0x27`, то есть `09:27`, а не `09:39`; это write-only команда.
+
 ### Дополнительный country/region readback
 
 В современных Air 3/Air 3S PCAP и DJI Fly `libsdk_jni.so` независимо

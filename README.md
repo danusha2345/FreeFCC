@@ -85,8 +85,9 @@ The former two-second FCC keepalive is no longer used. After a successful
 primer, query, or refresh frames. Its incremental parser accepts CRC-valid
 passive `03:44` from both direct DUML and the `55 cc 30 75` envelope. The push
 reports the current Home Point state; when it is recorded, FreeFCC closes the
-listener and performs one complete FCC apply. A prior `not recorded` state is
-not required.
+listener, waits two seconds for regional initialization to settle, rebuilds the
+complete 21-frame × 2-round profile, and sends it on the exact DUML port found
+by **Connect**. A prior `not recorded` state is not required.
 If an established stream disconnects after reporting `not recorded`, one
 bounded recovery is permitted; otherwise disconnects stop fail-closed, so there
 is no disruptive reconnect loop.
@@ -138,7 +139,7 @@ Swipe from the right edge to open ATV Launcher. Open the Files app, find your fo
 
 1. Power on the drone and link it to the controller
 2. Open FreeFCC and tap **Connect**
-3. FreeFCC now continues automatically after **Connect**: it waits until a valid current Home Point status is `recorded`, then sends the full FCC profile once. It does not launch DJI Fly automatically. Manual **Send FCC Request** remains available for testing or recovery.
+3. FreeFCC now continues automatically after **Connect**: it waits until a valid current Home Point status is `recorded`, allows two seconds for regional setup to settle, then sends the full FCC profile once. It does not launch DJI Fly automatically. Manual **Send FCC Request** remains available for testing or recovery.
 4. For 4G diagnostics, tap **Probe 4G Endpoint** first. This is read-only and only checks whether `/duss/mb/0x205` is reachable. **Send 4G Activation Frames** remains experimental and confirms writes only, not activation.
    > **Note:** The integrated eSIM path on DJI Avata 360 is not yet proven compatible with the captured external-module profile. Please attach the LAN logs to an [issue](https://github.com/danusha2345/FreeFCC/issues) when testing.
 5. To request CE restore, tap **Send CE Restore**. The app confirms transport writes only; verify the actual RF mode in DJI Fly.
@@ -196,7 +197,7 @@ The LED card keeps physical state separate from write completion. Its refresh ac
 
 ### FCC Profile
 
-21 frames sent in 2 rounds with 30ms between frames and 100ms between rounds. The sequence enters service mode, sets the radio region to FCC, writes channel groups and power limits, commits the change, and exits service mode. The same 21 frames work on every DJI aircraft model tested (Mini 5 Pro, Mini 4 Pro, Mavic 4 Pro, Air 3S, Neo, Avata 360). All requested writes must now complete before the UI reports that the sequence was sent. The proxy cannot confirm the resulting RF region, so verify the Transmission graph in DJI Fly.
+21 frames sent in 2 rounds with 30ms between frames and 100ms between rounds. The sequence enters service mode, sets the radio region to FCC, writes channel groups and power limits, commits the change, and exits service mode. The same 21 frames work on every DJI aircraft model tested (Mini 5 Pro, Mini 4 Pro, Mavic 4 Pro, Air 3S, Neo, Avata 360). All requested writes must now complete before the UI reports that the sequence was sent. The proxy cannot confirm the resulting RF region, so verify the Transmission graph in DJI Fly. Pressing Back moves FreeFCC to the background instead of destroying its Activity; Android process death still requires a new **Connect**.
 
 The CE/default-region action is experimental. It writes the existing single-frame `ce_restore.json` profile, stops keepalive first, and reports only that the command was sent. Its effect must also be verified in DJI Fly.
 

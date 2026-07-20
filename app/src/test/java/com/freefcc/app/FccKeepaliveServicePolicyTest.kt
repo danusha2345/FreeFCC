@@ -31,4 +31,9 @@ class FccKeepaliveServicePolicyTest {
             FccKeepaliveService.deliveredStartGeneration(FccKeepaliveService.ACTION_STOP, 7L)
         )
     }
+
+    @Test
+    fun automaticApplyWaitsForPostHomePointRegionSettle() {
+        assertEquals(2_000L, FccKeepaliveService.POST_HOME_POINT_SETTLE_DELAY_MS)
+    }
 }

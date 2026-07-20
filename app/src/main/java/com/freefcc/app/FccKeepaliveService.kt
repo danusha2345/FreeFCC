@@ -24,6 +24,14 @@ internal enum class BootstrapApplyResult {
     CANCELLED
 }
 
+internal data class BootstrapApplyReport(
+    val result: BootstrapApplyResult,
+    val port: Int,
+    val expectedWrites: Int,
+    val flushedWrites: Int,
+    val matchingAcks: Int
+)
+
 internal object BootstrapRetryPolicy {
     fun shouldRetry(result: BootstrapApplyResult): Boolean =
         result == BootstrapApplyResult.PRE_WRITE_CONNECT_FAILED
@@ -54,6 +62,7 @@ class FccKeepaliveService : Service() {
         private const val INITIAL_CONNECT_RETRY_DELAY_MS = 15_000L
         private const val MAX_INITIAL_CONNECT_ATTEMPTS = 2
         private const val ARMED_STREAM_RETRY_DELAY_MS = 2_000L
+        internal const val POST_HOME_POINT_SETTLE_DELAY_MS = 2_000L
         private const val APPLY_CONNECT_RETRY_DELAY_MS = 5_000L
         private const val PREFS_NAME = "freefcc"
         private const val PREF_AUTO_FCC = "auto_fcc"
@@ -147,7 +156,7 @@ class FccKeepaliveService : Service() {
     @Volatile private var destroyed = false
     private val transport = DumlTransport()
 
-    /** Cached at onCreate — JSON parsing and CRC building do not belong in the worker. */
+    /** Loaded once for fail-fast validation; apply builds a fresh profile after Home Point. */
     private var cachedBootstrapProfile: Profiles.Profile? = null
 
     override fun onCreate() {
@@ -260,7 +269,7 @@ class FccKeepaliveService : Service() {
         if (keepaliveJob?.isActive == true) return@synchronized
 
         val worker = scope.launch(start = CoroutineStart.LAZY) {
-            val bootstrapProfile = cachedBootstrapProfile ?: return@launch
+            cachedBootstrapProfile ?: return@launch
             val workerJob = currentCoroutineContext()[Job]
             FccRuntime.tracker.serviceRunning()
             val homePointSession = HomePointSessionGate()
@@ -344,8 +353,46 @@ class FccKeepaliveService : Service() {
                 return@launch
             }
 
-            var finalResult: BootstrapApplyResult? = null
-            while (requestGate.isCurrent(generation) && finalResult == null) {
+            val homePointObservedAtMs = System.currentTimeMillis()
+            FccViewModel.logServiceEvent(
+                "AUTO FCC: Home Point=true observed; settling ${POST_HOME_POINT_SETTLE_DELAY_MS / 1_000}s"
+            )
+            delay(POST_HOME_POINT_SETTLE_DELAY_MS)
+            if (!requestGate.isCurrent(generation)) return@launch
+
+            val pinnedPort = FccRuntime.tracker.state.value.controllerPort
+            if (pinnedPort == null) {
+                FccViewModel.logServiceEvent(
+                    "AUTO FCC: stopped before write — Connect did not provide a pinned DUML port"
+                )
+                synchronized(Companion) {
+                    if (!requestGate.complete(generation)) return@synchronized
+                    getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                        .edit().putBoolean(PREF_KEEPALIVE, false).apply()
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    FccRuntime.tracker.serviceFailed("AUTO FCC has no pinned Connect port")
+                    stopSelfResult(latestStartId)
+                }
+                return@launch
+            }
+
+            val bootstrapProfile = try {
+                Profiles.load(this@FccKeepaliveService, "fcc.json")
+            } catch (e: Exception) {
+                FccViewModel.logServiceEvent("AUTO FCC: fresh profile load failed: ${e.message}")
+                synchronized(Companion) {
+                    if (!requestGate.complete(generation)) return@synchronized
+                    getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                        .edit().putBoolean(PREF_KEEPALIVE, false).apply()
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    FccRuntime.tracker.serviceFailed("FCC profile unavailable after Home Point")
+                    stopSelfResult(latestStartId)
+                }
+                return@launch
+            }
+
+            var finalReport: BootstrapApplyReport? = null
+            while (requestGate.isCurrent(generation) && finalReport == null) {
                 var hardwareLease: HardwareLock.Lease? = null
                 while (requestGate.isCurrent(generation) && hardwareLease == null) {
                     hardwareLease = HardwareLock.tryBegin()
@@ -353,34 +400,68 @@ class FccKeepaliveService : Service() {
                 }
                 if (!requestGate.isCurrent(generation) || hardwareLease == null) return@launch
 
-                val attempt = try {
-                    sendBootstrapProfile(bootstrapProfile, generation)
+                val expectedWrites = bootstrapProfile.frames.size * bootstrapProfile.rounds
+                val runtimeAttempt = FccRuntime.tracker.beginApply(
+                    origin = FccApplyOrigin.HOME_POINT_AUTO,
+                    port = pinnedPort,
+                    expectedWrites = expectedWrites,
+                    homePointObservedAtMs = homePointObservedAtMs
+                )
+                FccViewModel.logServiceEvent(
+                    "AUTO FCC: applying $expectedWrites writes on pinned port $pinnedPort"
+                )
+                val report = try {
+                    sendBootstrapProfile(bootstrapProfile, generation, pinnedPort)
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
-                } catch (_: Exception) {
-                    BootstrapApplyResult.PARTIAL_FAILURE
+                } catch (e: Exception) {
+                    FccViewModel.logServiceEvent("AUTO FCC: apply error: ${e.message}")
+                    BootstrapApplyReport(
+                        result = BootstrapApplyResult.PARTIAL_FAILURE,
+                        port = pinnedPort,
+                        expectedWrites = expectedWrites,
+                        flushedWrites = 0,
+                        matchingAcks = 0
+                    )
                 } finally {
                     hardwareLease.close()
                 }
 
+                val outcome = when (report.result) {
+                    BootstrapApplyResult.SUCCESS -> FccApplyOutcome.ALL_WRITES_FLUSHED
+                    BootstrapApplyResult.PRE_WRITE_CONNECT_FAILED -> FccApplyOutcome.PRE_WRITE_CONNECT_FAILED
+                    BootstrapApplyResult.PARTIAL_FAILURE -> FccApplyOutcome.PARTIAL_WRITE_FAILURE
+                    BootstrapApplyResult.CANCELLED -> FccApplyOutcome.CANCELLED
+                }
+                FccRuntime.tracker.finishApply(
+                    startedAtMs = runtimeAttempt.startedAtMs,
+                    flushedWrites = report.flushedWrites,
+                    matchingAcks = report.matchingAcks,
+                    outcome = outcome
+                )
+                FccViewModel.logServiceEvent(
+                    "AUTO FCC: ${report.result} on port ${report.port}; " +
+                        "writes=${report.flushedWrites}/${report.expectedWrites}, " +
+                        "matching_acks=${report.matchingAcks}; RF state unknown"
+                )
+
                 when {
-                    BootstrapRetryPolicy.shouldRetry(attempt) -> {
+                    BootstrapRetryPolicy.shouldRetry(report.result) -> {
                         // Safe retry: no profile frame was sent.
                         delay(APPLY_CONNECT_RETRY_DELAY_MS)
                     }
-                    attempt == BootstrapApplyResult.CANCELLED -> return@launch
-                    else -> finalResult = attempt
+                    report.result == BootstrapApplyResult.CANCELLED -> return@launch
+                    else -> finalReport = report
                 }
             }
 
-            val written = finalResult == BootstrapApplyResult.SUCCESS
+            val written = finalReport?.result == BootstrapApplyResult.SUCCESS
             synchronized(Companion) {
                 // Completion and all terminal side effects are one lifecycle
                 // transaction. A stop/start that creates a newer generation
                 // either happens before this block (and makes complete fail)
                 // or after it (and cannot be torn down by this worker).
                 if (!requestGate.complete(generation)) return@synchronized
-                FccRuntime.tracker.recordWrite(written)
                 getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                     .edit().putBoolean(PREF_KEEPALIVE, false).apply()
                 stopForeground(STOP_FOREGROUND_REMOVE)
@@ -408,26 +489,51 @@ class FccKeepaliveService : Service() {
     /** Retries are allowed only before the first frame; partial profiles are final failures. */
     private suspend fun sendBootstrapProfile(
         profile: Profiles.Profile,
-        generation: Long
-    ): BootstrapApplyResult {
-        if (!requestGate.isCurrent(generation)) return BootstrapApplyResult.CANCELLED
-        if (profile.port == DumlTransport.PORT && !transport.connect()) {
-            return BootstrapApplyResult.PRE_WRITE_CONNECT_FAILED
+        generation: Long,
+        pinnedPort: Int
+    ): BootstrapApplyReport {
+        val expectedWrites = profile.frames.size * profile.rounds
+        if (!requestGate.isCurrent(generation)) {
+            return BootstrapApplyReport(
+                BootstrapApplyResult.CANCELLED, pinnedPort, expectedWrites, 0, 0
+            )
         }
-        val port = if (profile.port == DumlTransport.PORT) {
-            transport.getDetectedPort().takeIf { it > 0 } ?: DumlTransport.PORT
-        } else {
-            profile.port
+        if (!transport.isReachable(pinnedPort)) {
+            return BootstrapApplyReport(
+                BootstrapApplyResult.PRE_WRITE_CONNECT_FAILED, pinnedPort, expectedWrites, 0, 0
+            )
         }
 
-        var allSuccess = true
+        var flushedWrites = 0
+        var matchingAcks = 0
         for (round in 0 until profile.rounds) {
             for ((frameIndex, frame) in profile.frames.withIndex()) {
-                if (!requestGate.isCurrent(generation)) return BootstrapApplyResult.CANCELLED
-                if (!transport.sendFrame(frame, profile.readWindowMs, port)) {
-                    allSuccess = false
+                if (!requestGate.isCurrent(generation)) {
+                    return BootstrapApplyReport(
+                        BootstrapApplyResult.CANCELLED,
+                        pinnedPort,
+                        expectedWrites,
+                        flushedWrites,
+                        matchingAcks
+                    )
                 }
-                if (!requestGate.isCurrent(generation)) return BootstrapApplyResult.CANCELLED
+                val exchange = transport.sendAndReceiveRaw(
+                    frame = frame,
+                    readWindowMs = profile.readWindowMs,
+                    port = pinnedPort,
+                    autoDetectPort = false
+                )
+                if (exchange.writeCompleted) flushedWrites++
+                if (exchange.matchedFrame != null) matchingAcks++
+                if (!requestGate.isCurrent(generation)) {
+                    return BootstrapApplyReport(
+                        BootstrapApplyResult.CANCELLED,
+                        pinnedPort,
+                        expectedWrites,
+                        flushedWrites,
+                        matchingAcks
+                    )
+                }
                 if (profile.interFrameDelay > 0 && frameIndex < profile.frames.lastIndex) {
                     delay(profile.interFrameDelay)
                 }
@@ -436,7 +542,12 @@ class FccKeepaliveService : Service() {
                 delay(profile.interRoundDelay)
             }
         }
-        return if (allSuccess) BootstrapApplyResult.SUCCESS else BootstrapApplyResult.PARTIAL_FAILURE
+        val result = if (flushedWrites == expectedWrites) {
+            BootstrapApplyResult.SUCCESS
+        } else {
+            BootstrapApplyResult.PARTIAL_FAILURE
+        }
+        return BootstrapApplyReport(result, pinnedPort, expectedWrites, flushedWrites, matchingAcks)
     }
 
     private fun createNotificationChannel() {
