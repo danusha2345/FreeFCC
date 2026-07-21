@@ -994,15 +994,34 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
         log("Reading GPS state...")
 
         runOnIO {
-            var portLease: Port40007Lock.Lease? = null
             try {
-                portLease = Port40007Lock.acquireForLed()
-                if (portLease == null) {
-                    update { copy(gpsStatus = "GPS port busy") }
-                    log("GPS read failed to acquire port 40007")
-                    return@runOnIO
+                var readback: GpsReadback? = null
+                var attemptedRead = false
+
+                for (attempt in 1..3) {
+                    val portLease = Port40007Lock.acquireForLed()
+                    if (portLease == null) {
+                        log("GPS status attempt $attempt/3 failed to acquire port 40007")
+                    } else {
+                        try {
+                            attemptedRead = true
+                            readback = readGpsState(DumlTransport(), attempts = 1)
+                        } finally {
+                            Port40007Lock.releaseFromLed(portLease)
+                        }
+                    }
+
+                    if (readback != null) break
+                    if (attempt < 3) {
+                        log("GPS status attempt $attempt/3 missing; reopening port")
+                        delay(150)
+                    }
                 }
-                applyGpsReadback(readGpsState(DumlTransport()), "GPS state unavailable")
+
+                applyGpsReadback(
+                    readback,
+                    if (attemptedRead) "GPS state unavailable" else "GPS port busy"
+                )
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -1015,7 +1034,6 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                     )
                 }
             } finally {
-                portLease?.let(Port40007Lock::releaseFromLed)
                 gpsOperationBusy.set(false)
                 update { copy(isGpsBusy = false) }
             }
@@ -1074,7 +1092,7 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
         log("GPS state read back: $label")
     }
 
-    /** Writes an explicit master GPS state up to three times, stopping after verification. */
+    /** Writes an explicit master GPS state five times, then verifies on fresh leases. */
     fun setGps(enabled: Boolean): Boolean {
         if (!gpsOperationBusy.compareAndSet(false, true)) {
             log("GPS busy — please wait.")
@@ -1104,9 +1122,9 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
 
                 var anyWriteSucceeded = false
 
-                for (attempt in 1..3) {
-                    update { copy(gpsStatus = "GPS $requestedLabel attempt $attempt/3...") }
-                    log("GPS $requestedLabel attempt $attempt/3")
+                for (attempt in 1..5) {
+                    update { copy(gpsStatus = "GPS $requestedLabel attempt $attempt/5...") }
+                    log("GPS $requestedLabel attempt $attempt/5")
 
                     val request = GpsControlProtocol.buildWriteRequest(enabled)
                     val writeSucceeded = DumlTransport().sendFrame(
@@ -1115,9 +1133,9 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                         port = DumlTransport.PORT_LED
                     )
                     anyWriteSucceeded = anyWriteSucceeded || writeSucceeded
-                    if (attempt < 3) {
+                    if (attempt < 5) {
                         log("GPS $requestedLabel write sent; repeating bounded command")
-                        delay(150)
+                        delay(100)
                     }
                 }
 

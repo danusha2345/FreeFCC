@@ -139,11 +139,12 @@ reply must be retained without interpretation.
 The GPS actions use the model-independent little-endian hash `82 95 42 c5`
 (`0xC5429582`) for `g_config.gps_cfg.gps_enable`. `gps_read` sends at most three
 wrapped read-only `03:F8` attempts and stops after the first validated reply.
-`gps_on` and `gps_off` send three bounded idempotent `03:F9` writes 150 ms
-apart, release their port-`40007` lease, and after 250 ms start the same
-standalone `03:F8` Refresh path used by `gps_read`. Live `rc520` evidence showed
-that reads inside the write lease could all fail even when the physical state
-changed, while a separate manual Refresh immediately returned the new value.
+`gps_on` and `gps_off` send five bounded idempotent `03:F9` writes 100 ms apart,
+release their port-`40007` lease, and after 250 ms start the same standalone
+`03:F8` Refresh path used by `gps_read`. Each of the three status attempts uses
+a separate port lease. Live `rc520` evidence showed that reads sharing one bad
+lease could all fail even when the physical state changed, while a separate
+manual Refresh immediately returned the new value.
 They never poll the proxy in the background:
 
 ```bash
