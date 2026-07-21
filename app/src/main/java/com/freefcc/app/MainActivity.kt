@@ -33,8 +33,6 @@ import androidx.compose.ui.draw.*
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
@@ -45,8 +43,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
-import kotlin.math.sin
-import kotlin.math.PI
 
 // ═══════════════════════════════════════════════════════════════════════
 // Colors
@@ -116,7 +112,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun AppRoot(viewModel: FccViewModel) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    val pagerState = rememberPagerState(initialPage = 0) { 4 }
+    val pagerState = rememberPagerState(initialPage = 0) { 5 }
     val scope = rememberCoroutineScope()
 
     val entrance = remember { Animatable(0f) }
@@ -159,9 +155,10 @@ private fun AppRoot(viewModel: FccViewModel) {
         ) { page ->
             when (page) {
                 0 -> FccPage(state, viewModel)
-                1 -> InfoPage(state, viewModel)
-                2 -> LogPage(state, viewModel)
-                3 -> UpdatePage(state, viewModel)
+                1 -> ModemPage(state, viewModel)
+                2 -> InfoPage(state, viewModel)
+                3 -> LogPage(state, viewModel)
+                4 -> UpdatePage(state, viewModel)
             }
         }
 
@@ -355,63 +352,6 @@ private fun FccPage(state: AppState, viewModel: FccViewModel) {
             }
         }
 
-        Spacer(Modifier.height(SectionSpacing))
-
-        AnimatedVisibility(
-            visible = state.isConnected,
-            enter = fadeIn(tween(300)) + expandVertically(tween(300)),
-            exit = fadeOut(tween(200)) + shrinkVertically(tween(200))
-        ) {
-            Column {
-                GlowCard {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        SignalWaveIcon(
-                            active = false,
-                            color = Amber,
-                            modifier = Modifier.size(28.dp)
-                        )
-                        Spacer(Modifier.width(12.dp))
-                        Text(
-                            "4G Mode",
-                            color = TextWhite,
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    BodyText(
-                        if (state.fourGMessage.isNotEmpty()) state.fourGMessage
-                        else "Experimental. Probe the DUSS endpoint first; reachability does not prove activation.",
-                        TextGray
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedButton(
-                        onClick = { viewModel.probe4gEndpoint() },
-                        enabled = !state.isHardwareBusy && !state.is4gBusy,
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Amber)
-                    ) {
-                        Icon(Icons.Default.Search, null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("Probe 4G Endpoint")
-                    }
-                    Spacer(Modifier.height(8.dp))
-
-                    if (state.is4gBusy) {
-                        ProgressDisplay(state.busyProgress, "Sending 4G activation frames...")
-                    } else {
-                        GlowButton("Send 4G Activation Frames", Amber, enabled = !state.isHardwareBusy) {
-                            viewModel.send4gActivationFrames()
-                        }
-                    }
-                }
-            }
-        }
-
         // Aircraft GPS and LED controls share port 40007 and are serialized.
         Spacer(Modifier.height(SectionSpacing))
         GlowCard {
@@ -597,6 +537,79 @@ private fun RowScope.CompactControlButton(
     }
 }
 // ═══════════════════════════════════════════════════════════════════════
+// Page 2: 4G modem
+// ═══════════════════════════════════════════════════════════════════════
+
+@Composable
+private fun ModemPage(state: AppState, viewModel: FccViewModel) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = PageHorizontalPadding)
+            .padding(bottom = BottomNavHeight + PageBottomPadding),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Spacer(Modifier.height(PageTopPadding))
+        PageTitle("4G Modem", Icons.Filled.SettingsInputAntenna)
+        Spacer(Modifier.height(8.dp))
+
+        GlowCard {
+            Text("Aircraft identity", color = TextWhite, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(6.dp))
+            InfoRow("Last model code", state.aircraftModelCode.ifEmpty { "Not detected" })
+            Spacer(Modifier.height(4.dp))
+            DividerLine()
+            Spacer(Modifier.height(4.dp))
+            InfoRow("Last factory S/N", state.aircraftSerial.ifEmpty { "Not detected" })
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = { viewModel.probeSerial() },
+                enabled = !state.isHardwareBusy && !state.is4gBusy,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = Cyan)
+            ) {
+                Icon(Icons.Default.Refresh, null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Refresh aircraft identity")
+            }
+        }
+
+        Spacer(Modifier.height(SectionSpacing))
+
+        GlowCard {
+            BodyText(
+                if (state.fourGMessage.isNotEmpty()) state.fourGMessage
+                else "Experimental 128-frame DJI profile. Endpoint reachability and successful writes do not prove that 4G activated.",
+                TextGray
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = { viewModel.probe4gEndpoint() },
+                enabled = !state.isHardwareBusy && !state.is4gBusy,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = Amber)
+            ) {
+                Icon(Icons.Default.Search, null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Probe 4G Endpoint")
+            }
+            Spacer(Modifier.height(8.dp))
+
+            if (state.is4gBusy) {
+                ProgressDisplay(state.busyProgress, "Sending 4G activation frames...")
+            } else {
+                GlowButton("Send 4G Activation Frames", Amber, enabled = !state.isHardwareBusy) {
+                    viewModel.send4gActivationFrames()
+                }
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Page 3: Info
+// ═══════════════════════════════════════════════════════════════════════
 
 @Composable
 private fun InfoPage(state: AppState, viewModel: FccViewModel) {
@@ -613,63 +626,37 @@ private fun InfoPage(state: AppState, viewModel: FccViewModel) {
         Spacer(Modifier.height(8.dp))
 
         GlowCard {
-            Text("Connection", color = TextWhite, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Text("Technical details", color = TextWhite, fontSize = 16.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(6.dp))
-            InfoRow("Controller", state.controllerModel.ifEmpty { "Unknown" })
+            InfoRow("App version", FccViewModel.APP_VERSION)
             Spacer(Modifier.height(4.dp))
             DividerLine()
             Spacer(Modifier.height(4.dp))
-            InfoRow(
-                "Status",
-                if (state.isConnected) "Connected" else "Disconnected",
-                valueColor = if (state.isConnected) Green else TextGray
-            )
+            InfoRow("Controller code", state.controllerModel.ifEmpty { "Not detected" })
             Spacer(Modifier.height(4.dp))
             DividerLine()
             Spacer(Modifier.height(4.dp))
-            InfoRow("Aircraft S/N", state.aircraftSerial.ifEmpty { "Not detected" })
-        }
-
-        Spacer(Modifier.height(SectionSpacing))
-
-        GlowCard {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Version Info", color = TextWhite, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                IconButton(
-                    onClick = { viewModel.queryDeviceInfo() },
-                    enabled = state.isConnected && !state.isQueryingInfo && !state.isHardwareBusy,
-                    modifier = Modifier.size(40.dp)
-                ) {
-                    if (state.isQueryingInfo) {
-                        CircularProgressIndicator(
-                            strokeWidth = 2.dp,
-                            color = Cyan,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    } else {
-                        Icon(Icons.Default.Refresh, "Query", tint = Cyan, modifier = Modifier.size(24.dp))
-                    }
-                }
+            InfoRow("Last aircraft code", state.aircraftModelCode.ifEmpty { "Not detected" })
+            Spacer(Modifier.height(4.dp))
+            DividerLine()
+            Spacer(Modifier.height(4.dp))
+            InfoRow("Last aircraft S/N", state.aircraftSerial.ifEmpty { "Not detected" })
+            if (state.lanLogUrl.isNotEmpty()) {
+                Spacer(Modifier.height(4.dp))
+                DividerLine()
+                Spacer(Modifier.height(4.dp))
+                InfoRow("LAN bridge", state.lanLogUrl)
             }
-            Spacer(Modifier.height(4.dp))
-
-            if (state.deviceInfo.isNotEmpty()) {
-                Text(
-                    state.deviceInfo,
-                    color = TextGray,
-                    fontSize = 12.sp,
-                    fontFamily = FontFamily.Monospace,
-                    lineHeight = 20.sp,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            } else if (!state.isConnected) {
-                BodyText("Connect to the controller first.", TextDim)
-            } else {
-                BodyText("Tap the refresh button to query version info.")
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = { viewModel.probeSerial() },
+                enabled = !state.isHardwareBusy,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = Cyan)
+            ) {
+                Icon(Icons.Default.Refresh, null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Refresh aircraft identity")
             }
         }
     }
@@ -1237,40 +1224,6 @@ private fun GlowButton(
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// Signal wave icon
-// ═══════════════════════════════════════════════════════════════════════
-
-@Composable
-private fun SignalWaveIcon(active: Boolean, color: Color, modifier: Modifier = Modifier) {
-    val phase = if (active) {
-        val transition = rememberInfiniteTransition(label = "wave")
-        val animatedPhase by transition.animateFloat(
-            0f, (2 * PI).toFloat(),
-            infiniteRepeatable(tween(1200, easing = LinearEasing), RepeatMode.Restart),
-            label = "wavePhase"
-        )
-        animatedPhase
-    } else {
-        0f
-    }
-
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val h = size.height
-        val centerY = h / 2
-        val amplitude = if (active) h * 0.25f else h * 0.08f
-        val lineColor = if (active) color else color.copy(0.35f)
-
-        val path = androidx.compose.ui.graphics.Path()
-        for (x in 0..w.toInt() step 2) {
-            val y = centerY + amplitude * sin((x / w).toDouble() * 2.0 * PI + phase.toDouble()).toFloat()
-            if (x == 0) path.moveTo(x.toFloat(), y) else path.lineTo(x.toFloat(), y)
-        }
-        drawPath(path, lineColor, style = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round))
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════════
 // Bottom navigation bar
 // ═══════════════════════════════════════════════════════════════════════
 
@@ -1282,6 +1235,7 @@ private fun BottomNavBar(
 ) {
     val tabs = listOf(
         Triple("FCC", Icons.Filled.Wifi, Cyan),
+        Triple("4G", Icons.Filled.SettingsInputAntenna, Amber),
         Triple("Info", Icons.Filled.Info, Green),
         Triple("Log", Icons.Filled.History, Amber),
         Triple("Update", Icons.Filled.SystemUpdate, Color(0xFF79A8FF))

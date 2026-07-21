@@ -64,7 +64,9 @@ default text mode. The five-second legacy mode is currently a local UI action.
 The list also includes FCC/CE, GPS, LED,
 device info, serial and 4G probes, updater actions, and flight-app launch. Busy
 hardware returns `409`; commands that require a prior controller connection or
-update check return `412`.
+update check return `412`. `serial_probe` and `four_g_activate` deliberately do
+not depend on the FCC UI connection flag: they establish readiness from a fresh
+aircraft identity probe and the `/duss/mb/0x205` endpoint check.
 
 `fcc_enabled` in `/api/status` is always `null`: the localhost proxy does not
 provide a physical RF-region readback. `fcc_sequence_written` and
@@ -75,6 +77,10 @@ timestamps, expected/flushed writes and matching ACK count; the
 The historical `home_point_monitor_*` and `keepalive_*` fields are compatibility
 aliases for the active foreground Auto FCC lifecycle; they no longer imply a
 DUML Home Point listener.
+
+Aircraft identity is split into `aircraft_model_code` (for example `WA530`) and
+`aircraft_serial` (full factory S/N or the best serial form observed). Cached
+display values never bypass the fresh identity requirement for a 4G send.
 
 ## Raw DUML
 

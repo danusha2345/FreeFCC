@@ -5,56 +5,39 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- Background with subtle gradient effect (simulated with layered paths) -->
-    <path android:fillColor="#070A14" android:pathData="M0,0h108v108h-108z" />
-    <path android:fillColor="#0D1220" android:pathData="M14,14h80v80h-80z" />
-
-    <!-- Outer radio wave arc (faintest) -->
+    <!-- Four rotors: a compact aircraft mark that survives launcher masking. -->
     <path
-        android:strokeColor="#4FC3F7"
-        android:strokeWidth="3"
-        android:strokeAlpha="0.25"
-        android:strokeLineCap="round"
         android:fillColor="#00000000"
-        android:pathData="M22,54 A32,32 0 0 1 86,54" />
-
-    <!-- Middle radio wave arc -->
-    <path
-        android:strokeColor="#4FC3F7"
+        android:strokeColor="#FF9D4D"
         android:strokeWidth="3.5"
-        android:strokeAlpha="0.5"
         android:strokeLineCap="round"
+        android:pathData="M27,37a7,7 0,1 0,14,0a7,7 0,1 0,-14,0 M67,37a7,7 0,1 0,14,0a7,7 0,1 0,-14,0 M27,66a7,7 0,1 0,14,0a7,7 0,1 0,-14,0 M67,66a7,7 0,1 0,14,0a7,7 0,1 0,-14,0" />
+
+    <!-- Arms and airframe. -->
+    <path
         android:fillColor="#00000000"
-        android:pathData="M30,54 A24,24 0 0 1 78,54" />
-
-    <!-- Inner radio wave arc (brightest) -->
-    <path
-        android:strokeColor="#4FC3F7"
-        android:strokeWidth="4"
-        android:strokeAlpha="0.8"
+        android:strokeColor="#FF9D4D"
+        android:strokeWidth="5"
         android:strokeLineCap="round"
+        android:pathData="M39,41L48,47 M69,41L60,47 M39,62L48,56 M69,62L60,56" />
+    <path
+        android:fillColor="#FF9D4D"
+        android:pathData="M48,43L60,43L65,51L60,60L48,60L43,51Z" />
+    <path
+        android:fillColor="#0C0E11"
+        android:pathData="M51,47L57,47L60,52L57,56L51,56L48,52Z" />
+    <path
+        android:fillColor="#4ED69A"
+        android:pathData="M51,50a3,3 0,1 0,6,0a3,3 0,1 0,-6,0" />
+
+    <!-- Sky marker and flight path: general Skylab identity, not a 4G mark. -->
+    <path
         android:fillColor="#00000000"
-        android:pathData="M38,54 A16,16 0 0 1 70,54" />
-
-    <!-- Center transmitter dot with glow -->
-    <path android:fillColor="#34D399" android:fillAlpha="0.2" android:pathData="M48,48 m12,0 a12,12 0 1 0 -24,0 a12,12 0 1 0 24,0" />
-    <path android:fillColor="#34D399" android:pathData="M51,51 m6,0 a6,6 0 1 0 -12,0 a6,6 0 1 0 12,0" />
-
-    <!-- Vertical signal line from dot upward -->
-    <path
-        android:strokeColor="#34D399"
-        android:strokeWidth="2.5"
+        android:strokeColor="#4ED69A"
+        android:strokeWidth="3"
         android:strokeLineCap="round"
-        android:pathData="M54,28 L54,44" />
-
-    <!-- Base bar (ground plane) -->
+        android:pathData="M54,24L54,31 M50.5,27.5L57.5,27.5 M32,75Q54,87 76,75" />
     <path
-        android:fillColor="#34D399"
-        android:fillAlpha="0.8"
-        android:pathData="M36,74 L72,74 L72,78 L36,78 Z" />
-
-    <!-- Small accent dots on base -->
-    <path android:fillColor="#4FC3F7" android:pathData="M40,71 m2,0 a2,2 0 1 0 -4,0 a2,2 0 1 0 4,0" />
-    <path android:fillColor="#4FC3F7" android:pathData="M68,71 m2,0 a2,2 0 1 0 -4,0 a2,2 0 1 0 4,0" />
-
+        android:fillColor="#4ED69A"
+        android:pathData="M29,73a3,3 0,1 0,6,0a3,3 0,1 0,-6,0" />
 </vector>

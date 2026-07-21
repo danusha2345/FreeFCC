@@ -34,7 +34,7 @@ A free and open-source Android app that unlocks FCC mode, sends experimental 4G 
 | **4G Activation** | Sends 4G activation frames to the aircraft (serial read at runtime) — no status readback, experimental |
 | **GPS Control** | Reads the master `gps_enable` state and provides experimental explicit ON/OFF commands with one-shot readback |
 | **LED Control** | Reads the current lamp state and verifies it after LED on/off commands (DJI Fly and a linked aircraft are required) |
-| **Device Info** | Attempts to query hardware and firmware version; response availability depends on the controller/proxy path |
+| **Device Info** | Shows app version, controller code, aircraft model code, factory S/N, and LAN bridge address |
 | **Auto FCC** | Offers one-shot DJI Fly Home Point text detection or the original four-frame keepalive every five seconds |
 | **Auto-Updater** | Checks `danusha2345/FreeFCC` GitHub Releases and lets you download/install from the app |
 | **LAN Diagnostic API** | Logs, live status, allowlisted app actions, and raw DUML request/response over HTTP on the controller's RFC1918 Wi-Fi address |
@@ -77,7 +77,7 @@ This fork has current live validation on DJI RC2. Upstream reports also cover RC
 | DJI Inspire 3 | RC Plus | Expected, untested | Cellular hardware supported; profile unverified | Not tested | Hardware verification required |
 | Other RC2 aircraft | RC2 | Should work | Unknown | Unknown | FCC profile is universal |
 
-The captured 4G profile is experimental and was derived from systems using external cellular hardware. DJI Avata 360 Enhanced Transmission edition instead has an integrated IoT eSIM module. FreeFCC can probe whether the controller exposes `/duss/mb/0x205`, but endpoint availability does not prove that the same 128-frame activation sequence is compatible. When the probe returns a short WA/WM identity, the legacy allowlist remains conservative (`wa341`, `wa233`, `wa234`, `wm630`); a freshly observed full `1581...` serial proceeds to the endpoint check.
+The captured 4G profile is experimental and was derived from systems using external cellular hardware. DJI Avata 360 Enhanced Transmission edition instead has an integrated IoT eSIM module. FreeFCC can probe whether the controller exposes `/duss/mb/0x205`, but endpoint availability does not prove that the same 128-frame activation sequence is compatible. An explicit experimental send accepts a freshly observed full `1581...` serial or structurally valid `WA/WM` identity; there is no model allowlist.
 
 Validated upstream on DJI RC2 firmware v10.00.0700; this fork was additionally exercised live on RC2 `rc331`. Future firmware can change the local proxy or DUML routing, so compatibility must be rechecked rather than assumed.
 
@@ -221,7 +221,7 @@ The CE/default-region action is experimental. It writes the existing single-fram
 
 128 frames sent in a single round with 10ms between each. Each frame carries the aircraft's serial number in its payload. The serial is read from the controller at runtime by listening for telemetry on the DUML socket.
 
-The captured profile is confirmed only as an external-module protocol artifact. Mavic 4 Pro (`wa341`), Matrice 300/350 (`wa233`/`wa234`), and Inspire 3 (`wm630`) remain the conservative short-code allowlist. DJI Avata 360 Enhanced Transmission edition has an integrated IoT eSIM module; compatibility with this exact profile is a hypothesis pending live endpoint and traffic evidence.
+The captured profile is confirmed only as an external-module protocol artifact. FreeFCC does not use a model allowlist: an explicit send accepts any freshly observed full factory serial or structurally valid `WA/WM` identity. DJI Avata 360 Enhanced Transmission edition has an integrated IoT eSIM module; compatibility with this exact profile remains a hypothesis pending a live send and DJI Fly state evidence.
 
 **How the 4G activation frames are sent:**
 
@@ -240,8 +240,8 @@ RC2 hardware evidence exposes the full factory serial in `51:14`. A live audit
 found only controller identity on `40009`/`8901` and no frames on `8902..8904`.
 The preferred format is a full `1581...` factory serial. The parser also
 recognizes the 16-character RC2 telemetry suffix beginning with `FA` for display
-and falls back to a 5-character `W[AM]xxx` model pattern. Only a full `1581...`
-serial or an allowlisted `WA/WM` code is accepted by the 4G flow. The last value
+and falls back to a 5-character `W[AM]xxx` model pattern. A full `1581...`
+serial or any structurally valid `WA/WM` code is accepted by the 4G flow. The last value
 is cached for display, but 4G requires a freshly observed current-aircraft
 identity.
 

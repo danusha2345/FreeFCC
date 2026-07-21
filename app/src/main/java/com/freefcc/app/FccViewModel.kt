@@ -40,6 +40,7 @@ data class AppState(
     val isHardwareBusy: Boolean = false,
     val busyProgress: Float = 0f,
     val aircraftSerial: String = "",
+    val aircraftModelCode: String = "",
     val controllerModel: String = "",
     val deviceInfo: String = "",
     val isQueryingInfo: Boolean = false,
@@ -164,25 +165,10 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
         private val MODEL_CODE_PATTERN = Regex("^W[AM][0-9]{3}")
 
         /**
-         * Aircraft model codes known to support DJI Cellular Dongle 2 / 4G.
-         * The Mini series (wa150, wa140, wm16x) does NOT support 4G — the
-         * cellular module is enterprise hardware only. Sending 4G frames to a
-         * non-4G aircraft wastes the user's time and produces a confusing
-         * "frames written but 4G didn't activate" message.
-         *
-         * Sources: DJI product list, captured profiles (only wa341 confirmed
-         * working on real hardware). wa233/wa234 = Matrice 300/350 series,
-         * wm630 = Inspire 3, wa341 = Mavic 4 Pro. All are DJI enterprise models
-         * that ship with or accept the Cellular Dongle 2.
-         */
-        private val MODELS_WITH_4G = setOf("wa341", "wa233", "wa234", "wm630")
-
-        /**
          * Normalizes an identity returned by [DumlTransport.probeSerial]. A
-         * full factory serial does not contain a model code, so model gating
-         * is only possible for the short WA/WM form. The 4G socket check still
-         * protects the full-serial path from sending when no 4G DUSS endpoint
-         * is available.
+         * full factory serial does not contain a model code. Any structurally
+         * valid WA/WM identity is accepted for an explicit experimental send;
+         * route availability is checked separately before anything is sent.
          */
         internal fun parseFourGIdentity(raw: String): FourGIdentity? {
             val normalized = raw.trim().uppercase(Locale.US)
@@ -193,9 +179,6 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                 ?: return null
             return FourGIdentity(normalized, modelCode)
         }
-
-        internal fun isSupportedFourGModel(modelCode: String): Boolean =
-            modelCode.lowercase(Locale.US) in MODELS_WITH_4G
 
         private fun processLogSnapshot(): List<String> =
             synchronized(processLogLock) { processLogs.toList() }
@@ -224,6 +207,7 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
     private val prefs = app.getSharedPreferences("freefcc", Context.MODE_PRIVATE)
     private var initialized = false
     @Volatile private var aircraftIdentityVerified = false
+    @Volatile private var verifiedAircraftIdentity = ""
 
     init {
         // MainActivity.onCreate() calls init() below on every Activity re-creation
@@ -260,11 +244,23 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                 }
             }
         }
-        // Restore the cached aircraft serial from a previous session so the
-        // user does not have to re-probe before 4G if the drone is the same.
-        val cachedSerial = prefs.getString("aircraft_serial", "").orEmpty()
-        if (cachedSerial.isNotEmpty()) {
-            update { copy(aircraftSerial = cachedSerial) }
+        // Migrate the former single identity field into separate display
+        // values. Cached values remain display-only until a fresh probe.
+        val cachedIdentity = prefs.getString("aircraft_serial", "").orEmpty()
+        val cachedModelCode = prefs.getString("aircraft_model_code", "").orEmpty()
+        val normalizedCached = cachedIdentity.trim().uppercase(Locale.US)
+        val legacyModelCode = MODEL_CODE_PATTERN.find(normalizedCached)?.value.orEmpty()
+        val cachedSerial = normalizedCached.takeUnless { legacyModelCode.isNotEmpty() }.orEmpty()
+        if (cachedModelCode.isEmpty() && legacyModelCode.isNotEmpty()) {
+            prefs.edit().putString("aircraft_model_code", legacyModelCode).apply()
+        }
+        if (cachedSerial.isNotEmpty() || cachedModelCode.isNotEmpty() || legacyModelCode.isNotEmpty()) {
+            update {
+                copy(
+                    aircraftSerial = cachedSerial,
+                    aircraftModelCode = cachedModelCode.ifEmpty { legacyModelCode }
+                )
+            }
         }
         restorePersistedControlReadbacks()
     }
@@ -519,9 +515,11 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                     }
                     if (serial.isNotEmpty()) {
                         aircraftIdentityVerified = true
-                        prefs.edit().putString("aircraft_serial", serial).apply()
+                        verifiedAircraftIdentity = serial
+                        storeAircraftIdentity(serial)
                     } else {
                         aircraftIdentityVerified = false
+                        verifiedAircraftIdentity = ""
                     }
                     ledOperationBusy.set(true)
                     update { copy(isLedBusy = true, ledStatus = "Reading LED state after Connect...") }
@@ -542,8 +540,7 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                             } else {
                                 "Connected — starting Auto FCC..."
                             },
-                            isConnected = true,
-                            aircraftSerial = serial
+                            isConnected = true
                         )
                     }
                     if (serial.isNotEmpty()) log("Aircraft serial: $serial")
@@ -876,12 +873,10 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
      * written — never confirm the aircraft actually activated 4G. There is
      * no "off" action: no send-only command exists to reliably deactivate it.
      *
-     * Guards (added to stop the most common failure modes early):
+     * Guards:
      * 1. Identity must be either a full 1581... factory serial or a short
      *    W[AM]xxx model identity. Both are valid probeSerial() results.
-     * 2. A short model identity must be in the 4G-capable set. A full serial
-     *    does not expose the model code, so it proceeds to the socket check.
-     * 3. The controller's 4G endpoint must be present (the abstract socket
+     * 2. The controller's 4G endpoint must be present (the abstract socket
      *    must be connectable). This does not identify external vs integrated
      *    cellular hardware; it only proves the DUSS route is exposed.
      */
@@ -909,18 +904,9 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                 }
 
                 val modelCode = identity.modelCode
-                if (modelCode != null && !isSupportedFourGModel(modelCode)) {
-                    update {
-                        copy(is4gBusy = false, fourGMessage = "The captured 4G profile is not verified for $modelCode. Probe the endpoint and collect logs before testing activation.")
-                    }
-                    log("4G activation aborted — model $modelCode is not in the 4G-capable set $MODELS_WITH_4G")
-                    return@runOnIO
-                }
-                if (modelCode == null) {
-                    log("4G model guard: full factory S/N detected; model will be validated by endpoint availability")
-                }
+                log("4G identity accepted for experimental send: ${modelCode ?: "full factory S/N"}")
 
-                // Guard 3: endpoint pre-check — fast-fail if the DUSS route does not exist.
+                // Guard 2: endpoint pre-check — fast-fail if the DUSS route does not exist.
                 if (!transport.is4gEndpointReachable()) {
                     update {
                         copy(is4gBusy = false, fourGMessage = "4G DUSS endpoint /duss/mb/0x205 is not reachable for the current link.")
@@ -1502,11 +1488,12 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                 val serial = transport.probeSerial(2_500, effectivePort)
                 if (serial.isNotEmpty()) {
                     aircraftIdentityVerified = true
-                    update { copy(aircraftSerial = serial) }
-                    prefs.edit().putString("aircraft_serial", serial).apply()
-                    log("Aircraft serial: $serial (cached)")
+                    verifiedAircraftIdentity = serial
+                    storeAircraftIdentity(serial)
+                    log("Aircraft identity: $serial (cached)")
                 } else {
                     aircraftIdentityVerified = false
+                    verifiedAircraftIdentity = ""
                     log("No serial detected — is the aircraft powered on?")
                 }
             } finally {
@@ -1785,6 +1772,7 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
             "gps_value" to current.gpsRawValue,
             "gps_status" to current.gpsStatus,
             "aircraft_serial" to current.aircraftSerial,
+            "aircraft_model_code" to current.aircraftModelCode,
             "device_info" to current.deviceInfo,
             "four_g_message" to current.fourGMessage,
             "update_available" to current.updateAvailable,
@@ -1850,9 +1838,9 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                 "gps_on" -> acceptedBoolean(command, setGps(true), "gps_busy")
                 "gps_off" -> acceptedBoolean(command, setGps(false), "gps_busy")
                 "device_info" -> acceptedHardware(command, requireConnected = true) { queryDeviceInfo() }
-                "serial_probe" -> acceptedHardware(command, requireConnected = true) { probeSerial() }
+                "serial_probe" -> acceptedHardware(command, requireConnected = false) { probeSerial() }
                 "four_g_probe" -> accepted(command) { probe4gEndpoint() }
-                "four_g_activate" -> acceptedHardware(command, requireConnected = true) { send4gActivationFrames() }
+                "four_g_activate" -> acceptedHardware(command, requireConnected = false) { send4gActivationFrames() }
                 "update_check" -> accepted(command) { checkForUpdates(force = true) }
                 "update_download" -> when {
                     _state.value.isDownloadingUpdate -> lanError(409, "update_download_busy")
@@ -2262,6 +2250,19 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
         return false
     }
 
+    /** Stores model code and factory serial independently for the Info page. */
+    private fun storeAircraftIdentity(raw: String) {
+        val normalized = raw.trim().uppercase(Locale.US)
+        val modelCode = MODEL_CODE_PATTERN.find(normalized)?.value
+        if (modelCode != null) {
+            update { copy(aircraftModelCode = modelCode) }
+            prefs.edit().putString("aircraft_model_code", modelCode).apply()
+        } else {
+            update { copy(aircraftSerial = normalized) }
+            prefs.edit().putString("aircraft_serial", normalized).apply()
+        }
+    }
+
     /**
      * Returns an identity freshly verified in this process, probing when the
      * current value came only from persistent cache. A cached identity may
@@ -2269,8 +2270,9 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
      * serial-specific 4G frames.
      */
     private suspend fun getOrProbeSerial(): String {
-        val current = _state.value.aircraftSerial
-        if (aircraftIdentityVerified && current.isNotEmpty()) return current
+        if (aircraftIdentityVerified && verifiedAircraftIdentity.isNotEmpty()) {
+            return verifiedAircraftIdentity
+        }
 
         log("Probing current aircraft identity for 4G...")
         val effectivePort = DumlTransport.PORT_LED
@@ -2293,9 +2295,12 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
         }
         if (serial.isNotEmpty()) {
             aircraftIdentityVerified = true
-            update { copy(aircraftSerial = serial) }
-            prefs.edit().putString("aircraft_serial", serial).apply()
+            verifiedAircraftIdentity = serial
+            storeAircraftIdentity(serial)
             log("Aircraft identity: $serial (verified and cached)")
+        } else {
+            aircraftIdentityVerified = false
+            verifiedAircraftIdentity = ""
         }
         return serial
     }
