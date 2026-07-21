@@ -503,6 +503,41 @@ dongle_display_control != 0 && lte_get_country_region() == 1
 `dongle_display_control=false`; он требует отдельного безопасного способа
 подмены read-only config/verified system и здесь не выполнялся.
 
+## Предварительный анализ RC 2 (`rc331`)
+
+Отдельно начат анализ скачанного официального bundle RC 2; его данные нельзя
+переносить на RC Pro 2 (`rc520`) без проверки.
+
+| Поле | Значение |
+|---|---|
+| Исходный artifact | `V10.00.0700_rc331_dji_system.bin` |
+| SHA-256 bundle | `1778183d5a742bbacd77567bf7b33ec9d6927c0edc963437da684767e401d058` |
+| Внешняя версия | `10.00.0700`, `antirollback=7`, `enforce=0` |
+| Модуль Android | `rc331_0205_v00.01.14.99_20260609.pro.fw.sig` |
+| SHA-256 signed module | `f707cf3dc0be2894b111ce4973d0206e896a2c7e9c4ebe43de1040b528cf49ce` |
+| Внутренняя OTA | `DJI/rc331/rc331:11/V00.01.14.99/11499:user/test-keys` |
+| OTA timestamp | `2026-06-08T16:59:09Z`, metadata Unix timestamp `1780937949` |
+| OTA layout | полная A/B OTA, 29 partitions, `pre-device=rc331` |
+
+Внешняя IMAH signature модуля `0205` успешно проверена опубликованным
+`PRAK-2020-01`; checksum зашифрованных и распакованных данных совпал. Внутри
+находится стандартная A/B OTA с `payload.bin`, metadata и
+`META-INF/com/android/otacert`. Файл `otacert` побайтно совпадает с RC Pro 2
+builds `139/5/440/576`:
+
+```text
+SHA256 b176a297c6bcc436b8149a7311627484d18c8e9d3ed2bc67c68b2af5347670e1
+subject O=DJI, CN=DJI
+fingerprint 52:32:A1:44:C8:4A:04:EA:34:02:A0:27:BF:AD:76:B4:F3:21:E0:C3:5D:0F:F5:C8:82:6E:D7:76:39:85:54:EB
+```
+
+Маркер `user/test-keys` заметно отличается от RC Pro 2
+`user/release-keys`, но сам по себе не доказывает, что RC 2 примет OTA,
+подписанную произвольным test key: доверенные OTA/AVB keys и runtime policy
+нужно проверять отдельно. На следующий сеанс остаются извлечение partitions,
+проверка `ro.ota.allow_downgrade`, `ro.debuggable`, AVB key descriptors,
+`dji_lte`/init services и доступных способов временного bind/overlay.
+
 ## Граница с FreeFCC и OpenFCC
 
 Текущий FreeFCC не выполняет перечисленные Fibocom AT-команды. Его experimental
