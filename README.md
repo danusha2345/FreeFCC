@@ -140,6 +140,14 @@ Swipe from the right edge to open ATV Launcher. Open the Files app, find your fo
 
 ## How to Use
 
+For the isolated RC2 Home Point text test in v1.5.30, open FreeFCC, tap
+**Open Accessibility Settings**, enable **FreeFCC Home Point Test**, and switch
+to the original DJI Fly. Do not start **Auto FCC** during this test. The service
+reads only accessibility events and visible text from `dji.go.v5`, loads Home
+Point phrases from every locale present in the installed DJI Fly, and sends no
+FCC or DUML traffic. Return to the FreeFCC **Log** tab after Home Point is
+recorded and look for `HOME POINT MATCH`.
+
 1. Power on the drone and link it to the controller
 2. Open FreeFCC and tap **Auto FCC**
 3. After a successful controller connection and monitor start, FreeFCC switches focus to DJI Fly. In the background it waits until a valid current Home Point status is `recorded`, allows two seconds for regional setup to settle, then sends the full FCC profile once. Use **Send FCC Request** directly below **Auto FCC** to bypass Home Point waiting. While Auto FCC is active, the manual button is hidden and only **Cancel Auto FCC** is shown; cancelling returns to the manual action.

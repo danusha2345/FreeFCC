@@ -1,6 +1,8 @@
 package com.freefcc.app
 
+import android.content.Intent
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -29,6 +31,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -177,6 +180,7 @@ private fun AppRoot(viewModel: FccViewModel) {
 private fun FccPage(state: AppState, viewModel: FccViewModel) {
     val updateInfo = state.updateInfo
     val fccPresentation = fccUiPresentation(state.isFccEnabled)
+    val context = LocalContext.current
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -286,6 +290,40 @@ private fun FccPage(state: AppState, viewModel: FccViewModel) {
             if (state.aircraftSerial.isNotEmpty()) {
                 Spacer(Modifier.height(8.dp))
                 SerialRow(state.aircraftSerial, enabled = !state.isHardwareBusy) { viewModel.probeSerial() }
+            }
+        }
+
+        Spacer(Modifier.height(SectionSpacing))
+
+        GlowCard {
+            Text(
+                "Home Point event test",
+                color = TextWhite,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Enable FreeFCC Home Point Test, then switch to the original DJI Fly. " +
+                    "This only records Home Point events and visible DJI Fly text once per second; " +
+                    "it sends no FCC commands. Do not start Auto FCC during this test.",
+                color = TextGray,
+                fontSize = 12.sp,
+                lineHeight = 17.sp
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = {
+                    context.startActivity(
+                        Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                },
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = Amber)
+            ) {
+                Icon(Icons.Default.Visibility, null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Open Accessibility Settings")
             }
         }
 
