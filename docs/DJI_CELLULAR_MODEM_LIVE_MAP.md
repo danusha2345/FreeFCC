@@ -350,6 +350,93 @@ Bus` с RNDIS, diagnostic и двумя AT interfaces.
 двух QDC535EA functions конфликтной. Для диагностических скриптов их нужно
 различать по физическому USB path за внутренним hub.
 
+## Статический анализ RC Pro 2 OTA и регионального 4G-барьера
+
+Анализ выполнен без прошивки пульта. Исходные bundles в `Downloads` не
+изменялись; IMAH/Android OTA и разделы извлекались в ignored
+`.scratch/rcpro2_4g_ota/`. Ключевые функции независимо проверены Ghidra 12.1.2,
+Rizin и GNU ARM64 objdump.
+
+### Ряд внутренних версий `rc520_0205`
+
+| Artifact | Внешняя версия | Внутренний Android build | SHA-256 |
+|---|---:|---:|---|
+| OpenFCC `firmware_update.zip` | отдельная full A/B OTA | `V55.31.01.39/139` | `182e459ba29fc00aec9c66d547cd3fe4fd14bfa47d7063e486af7b82ba3542f6` |
+| `V01.00.0500_rc520_dji_system.bin` | `01.00.0500` | `V55.31.04.40/440` | `f0690fecb67a0262e8b9fe28f96a3c87c1be5cce4d6bde2c2fd8ea367b57cbc1` |
+| `V01.00.0600_rc520_dji_system.bin` | `01.00.0600` | `V55.31.05.76/576` | `1c0a57bf53663833250a94ddf88d1ebff1efe57582ed70a98b4f9f047f22bf5b` |
+| `V01.00.0700_rc520_dji_system.bin` | `01.00.0700` | `V55.31.05.76/576` | `c9319db7973777046764789c416f7ff6290de0fd73f40718852855d223fdd1e6` |
+
+Модули `rc520_0205_v55.31.05.76_20260410.pro.fw.sig` внутри bundles `0600`
+и `0700` побайтно совпадают: SHA-256
+`86d1b308479f48b76619e61ebbeeaaaa2c71bf5d918f5d391c8dd0267a901cdb`.
+То есть формальные версии `0600` и `0700` не дают двух разных состояний
+controller Android/LTE-кода. Полезная промежуточная точка — `0500/440`.
+
+OpenFCC artifact является полной DJI-signed A/B OTA, а не небольшим 4G-патчем:
+в metadata указаны `pre-device=rc520` и
+`post-build=DJI/rc520/rc520:11/V55.31.01.39/139:user/release-keys`.
+Сам ZIP не имеет JAR/SignApk-подписи, но обе отдельные Android A/B signatures —
+metadata и полный payload без signature blobs — успешно проверены RSA-ключом из
+`META-INF/com/android/otacert` (`openssl: Verified OK`). Certificate self-signed
+на `O=DJI, CN=DJI`, SHA-256 fingerprint
+`52:32:A1:44:C8:4A:04:EA:34:02:A0:27:BF:AD:76:B4:F3:21:E0:C3:5D:0F:F5:C8:82:6E:D7:76:39:85:54:EB`.
+Сравнение разделов с `V55.31.05.76` показало изменение всех partition images,
+кроме `dsp.img`. Поэтому действие launcher корректнее описывать как замену
+полной системной OTA на старый build, а не как открытие одного socket.
+
+### Доказанный auth gate
+
+В `V55.31.04.40` в `lte_cfg.json` появляется:
+
+```json
+"dongle_display_control": true
+```
+
+В `V55.31.01.39` ключ и обслуживающий его код отсутствуют. В `V55.31.05.76`
+ключ сохраняется. Функция `set_liblte_auth_info()` начиная не позднее build
+`440` содержит дополнительное условие отказа:
+
+```c
+dongle_display_control != 0 && lte_get_country_region() == 1
+```
+
+`lte_get_country_region()` возвращает `2`, когда текущий country code равен
+`CN`, `1` для любого другого непустого country code и `0`, пока код не получен.
+При штатном `dongle_display_control=true` функция поэтому не передаёт
+`AUTH_PARAM` в `liblte` вне Китая. В build `139` эта проверка отсутствует;
+остаются остальные причины отказа, включая пустой country code, LTE blacklist,
+отсутствие peer dongle и неготовый SIM state.
+
+Параллельно в build `440` появляется TLV tag `9`, строка
+`DONGLE_INFO_TAG_DONGLE_DISPLAY_CONTROL_INFO` и поле `need_display`:
+
+- parser начинает принимать dongle subtag `0..9`, тогда как build `139`
+  принимает только `0..8`;
+- `construct_dongle_info()` добавляет tag `9`, length `1`, со значением
+  `need_display`;
+- значение передаётся в event `0x1850` в сторону app host.
+
+Это объясняет сразу две наблюдаемые части нового поведения: отказ LTE auth вне
+`CN` и явную передачу приложению признака, нужно ли показывать dongle.
+
+| Claim | Level | Artifact/location | Evidence | Confidence |
+|---|---|---|---|---|
+| OpenFCC устанавливает старый полный controller build `139` | OBSERVED | OTA metadata и payload manifest | full A/B OTA, 29 partitions, DJI certificate | High |
+| Region gate появился между builds `139` и `440` | OBSERVED | `dji_lte:set_liblte_auth_info` | ветка отсутствует в `139`, присутствует в `440` и `576` | High |
+| Gate блокирует auth вне `CN` | DERIVED | `set_liblte_auth_info` + `lte_get_country_region` | `true && region==1` ведёт к error path до `liblte_set_param(AUTH_PARAM)` | High |
+| Новая прошивка сообщает app поле `need_display` | OBSERVED | dongle TLV parser/constructor, event `0x1850` | новый tag `9`, length `1`, parser range `0..9` | High |
+| Одного изменения JSON на `false` достаточно для штатной работы 4G | HYPOTHESIS | read-only `/system/etc/lte_cfg.json` | auth gate выключится, но остаются pairing, SIM, peer dongle и certificate checks | Medium |
+
+Свойство `persist.rc.country.is_in_eu`, также появившееся в новых builds, не
+является этим барьером. Его проверенные call sites подавляют отправку части
+диагностических сообщений в blackbox; LTE initialization оно не запрещает.
+
+Для точного определения первого затронутого релиза нужен ещё один официальный
+`rc520_0205` build между `139` и `440`. Для проверки bypass без полной замены
+OTA наиболее информативен контролируемый runtime-тест с тем же build `576`, но
+с `dongle_display_control=false`; он требует отдельного безопасного способа
+подмены read-only config/verified system и здесь не выполнялся.
+
 ## Граница с FreeFCC и OpenFCC
 
 Текущий FreeFCC не выполняет перечисленные Fibocom AT-команды. Его experimental
