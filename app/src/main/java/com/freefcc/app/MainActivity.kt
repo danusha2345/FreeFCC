@@ -235,7 +235,9 @@ private fun FccPage(state: AppState, viewModel: FccViewModel) {
                         BodyText(state.message)
                         Spacer(Modifier.height(8.dp))
                     }
-                    GlowButton(connectLabel, Cyan, enabled = !state.isHardwareBusy) { viewModel.connect() }
+                    GlowButton(connectLabel, Cyan, enabled = !state.isHardwareBusy) {
+                        viewModel.connect(launchFlightAppAfterConnect = true)
+                    }
                     Spacer(Modifier.height(8.dp))
                     GlowButton("Send FCC Request", Cyan, filled = false, enabled = !state.isHardwareBusy) {
                         viewModel.enableFcc()
@@ -250,6 +252,10 @@ private fun FccPage(state: AppState, viewModel: FccViewModel) {
                 }
                 state.isFccEnabled -> {
                     BodyText("FCC request was written. RF mode is unknown; verify in DJI Fly.", Amber)
+                    Spacer(Modifier.height(8.dp))
+                    GlowButton("Auto FCC", Cyan, enabled = !state.isHardwareBusy) {
+                        viewModel.connect(launchFlightAppAfterConnect = true)
+                    }
                     Spacer(Modifier.height(8.dp))
                     GlowButton(fccPresentation.primaryActionLabel, Red, enabled = !state.isHardwareBusy) { viewModel.disableFcc() }
                     Spacer(Modifier.height(8.dp))

@@ -379,7 +379,7 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
      * Connects to the DUML proxy, auto-detecting the correct port.
      * Probes for the aircraft serial number after connecting.
      */
-    fun connect(): Boolean {
+    fun connect(launchFlightAppAfterConnect: Boolean = false): Boolean {
         val hardwareLease = beginHardwareOp()
         if (hardwareLease == null) {
             log("Hardware busy — please wait for the current operation to finish.")
@@ -466,6 +466,9 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
             if (connected) {
                 if (startKeepalive()) {
                     log("Connect completed — waiting for current Home Point before FCC")
+                    if (launchFlightAppAfterConnect) {
+                        launchDjiFly()
+                    }
                 }
             }
         }

@@ -142,7 +142,8 @@ Swipe from the right edge to open ATV Launcher. Open the Files app, find your fo
 
 1. Power on the drone and link it to the controller
 2. Open FreeFCC and tap **Auto FCC**
-3. FreeFCC waits until a valid current Home Point status is `recorded`, allows two seconds for regional setup to settle, then sends the full FCC profile once. It does not launch DJI Fly automatically. Use **Send FCC Request** directly below **Auto FCC** to bypass Home Point waiting. While Auto FCC is active, the manual button is hidden and only **Cancel Auto FCC** is shown; cancelling returns to the manual action.
+3. After a successful controller connection and monitor start, FreeFCC switches focus to DJI Fly. In the background it waits until a valid current Home Point status is `recorded`, allows two seconds for regional setup to settle, then sends the full FCC profile once. Use **Send FCC Request** directly below **Auto FCC** to bypass Home Point waiting. While Auto FCC is active, the manual button is hidden and only **Cancel Auto FCC** is shown; cancelling returns to the manual action.
+   After replacing the aircraft battery without restarting the controller, tap **Auto FCC** again from the previous FCC-request result screen to wait for the new flight session's Home Point.
 4. For 4G diagnostics, tap **Probe 4G Endpoint** first. This is read-only and only checks whether `/duss/mb/0x205` is reachable. **Send 4G Activation Frames** remains experimental and confirms writes only, not activation.
    > **Note:** The integrated eSIM path on DJI Avata 360 is not yet proven compatible with the captured external-module profile. Please attach the LAN logs to an [issue](https://github.com/danusha2345/FreeFCC/issues) when testing.
 5. To request CE restore, tap **Send CE Restore**. The app confirms transport writes only; verify the actual RF mode in DJI Fly.
