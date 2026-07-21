@@ -99,22 +99,68 @@ USB-подключении и при запуске официального USB
 | `127.0.0.1:8902..8904` | Альтернативные DJI endpoints | Старый отрицательный capture относился к RC Pro 2; внешний RC2 `8902` уже доказан как активный stream |
 | abstract Unix `/duss/mb/0x205` | Endpoint принимает captured 4G-profile writes | Reachability и write completion не доказывают физическую 4G-активацию |
 
-## Ручная localhost-инвентаризация
+## Живая localhost-инвентаризация
 
-Начиная с SkylabFCCfree 1.5.40 LAN API содержит команду
-`local_socket_inventory`. Она нужна потому, что Wi-Fi scan не видит сервисы,
-привязанные только к `127.0.0.1` или abstract Unix sockets.
+После установки SkylabFCCfree 1.5.40 команда `local_socket_inventory` была один
+раз запущена на RC2. Все пять `/proc/net` sources оказались доступны. TCP
+connect-проход дошёл до порта `45771` и остановился по deadline `20 s`; payload
+не отправлялся. Так как proc tables уже дают полный список listeners, начиная с
+1.5.41 connect-проход полностью удалён и инвентаризация стала только пассивной.
 
-Команда:
+### TCP listeners
+
+| Порт | Bind | UID | Текущий вывод |
+|---:|---|---:|---|
+| `5037` | IPv6 wildcard | `0` | ADB-shaped system endpoint |
+| `5744` | `127.0.0.1` | `1021` | **DERIVED:** принадлежит Android GPS daemon UID; wire protocol не определён |
+| `8787` | Wi-Fi IPv4 RC2 | `10025` | SkylabFCCfree LAN API |
+| `8901` | `127.0.0.1` | `0` | DJI internal endpoint |
+| `8902` | IPv4 wildcard | `0` | Подтверждённый внешний passive high-rate stream |
+| `40007` | `127.0.0.1` | `0` | DJI wrapped telemetry/control proxy |
+| `40008` | `127.0.0.1` | `0` | **OBSERVED:** ранее не учтённый DJI/root listener; протокол неизвестен |
+| `40009` | `127.0.0.1` | `0` | DJI direct DUML broker |
+
+Android AOSP определяет UID `1021` как
+[`AID_GPS`, GPS daemon](https://android.googlesource.com/platform/system/core/+/master/libcutils/include/private/android_filesystem_config.h#72).
+Поэтому связь `5744` с GNSS-подсистемой основана на владельце socket, но
+назначение самого TCP-протокола ещё не доказано.
+
+### UDP sockets
+
+Найдены DHCP client `68/udp` на Wi-Fi, root loopback sockets `6698/udp` и
+`8471/udp`, а также wildcard UDP6 socket приложения на динамическом порту.
+Назначение `6698` и `8471` пока неизвестно; пакеты не отправлялись.
+
+### Значимые Unix sockets
+
+| Имя | Что доказано |
+|---|---|
+| `/dev/dji_lte_v1`, `/dev/wl_lte_v1` | **OBSERVED:** LTE-named endpoints присутствуют на RC2 даже без доказанной активной 4G-сессии |
+| `/dev/lte_liveview`, `/dev/lte_liveview-1173` | **OBSERVED:** два LTE liveview endpoint |
+| `/dev/lte_liveview_v2`, `/dev/lte_liveview_v2-1173` | **OBSERVED:** два LTE liveview v2 endpoint |
+| `@/duss/mb/0x0` | **OBSERVED:** DUSS endpoint; назначение не классифицировано |
+| `@/duss/mb/0x1d03` | **OBSERVED:** DUSS endpoint; назначение не классифицировано |
+| `@/duss/mb/0x1f06` | **OBSERVED:** DUSS endpoint; назначение не классифицировано |
+| `@/duss/mb/0x205` | Endpoint, используемый текущим experimental 4G profile |
+| `@/duss/mb/0xd00` | **OBSERVED:** DUSS endpoint; назначение не классифицировано |
+| `@/duss/mb/0xe04`, `0xe06`, `0xe07` | **OBSERVED:** DUSS endpoints; назначение не классифицировано |
+| `@/duss/wlm_fmsg_forward` | **OBSERVED:** DUSS/WLM forward endpoint; формат сообщений неизвестен |
+| `/dev/socket/dji_fpv`, `fpv_sock*` | **OBSERVED:** DJI/FPV-named local endpoints |
+
+Наличие LTE-named sockets доказывает загруженные локальные компоненты/IPC
+маршруты, но само по себе не доказывает SIM registration, data session или
+совместимость 128-frame профиля с `WA530`.
+
+### Поведение команды
+
+Начиная с 1.5.41 команда:
 
 - запускается только вручную;
-- ничего не отправляет подключившимся TCP-сервисам;
+- вообще не подключается к найденным TCP-сервисам;
 - читает доступные `/proc/net/tcp*`, `/proc/net/udp*`, `/proc/net/unix`;
-- один раз перебирает `127.0.0.1:1..65535` с connect timeout `15 ms`;
-- имеет общий deadline `20 s`;
 - блокируется во время Auto FCC и не работает в фоне;
-- возвращает открытые TCP-порты, UDP sockets, именованные Unix sockets,
-  доступные proc sources, ошибки и признак полного прохода.
+- возвращает TCP listeners, UDP sockets, Unix type/state/inode/name,
+  доступные proc sources, ошибки и признак полноты snapshot.
 
 Пример запуска приведён в [LAN Control API](LAN_CONTROL_API.md#localhost-socket-inventory).
 
@@ -140,6 +186,12 @@ USB-подключении и при запуске официального USB
 - **OBSERVED:** `5037` понимает ADB smart-socket protocol, но сейчас не даёт
   target для shell.
 - **OBSERVED:** внешняя и внутренняя карты портов различаются.
+- **OBSERVED:** отдельный root listener `40008` существует, но ещё не
+  классифицирован.
+- **DERIVED:** loopback listener `5744` принадлежит GPS daemon по Android UID
+  `1021`; это возможный read-only GNSS observation path, но протокол неизвестен.
+- **OBSERVED:** локальные LTE и LTE-liveview sockets существуют независимо от
+  доказательства активной cellular session.
 - **HYPOTHESIS:** `8902` может быть внутренней телеметрией, IPC bridge или
   multiplexed event bus; данных для более узкого названия пока нет.
 - 4G, GNSS, Home Point и общий control transport необходимо классифицировать по

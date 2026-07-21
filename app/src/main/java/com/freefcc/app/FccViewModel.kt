@@ -1869,7 +1869,7 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
         return try {
             val result = LocalSocketInventory.capture()
             log(
-                "Local socket inventory: ${result.openTcpPorts.size} TCP ports, " +
+                "Local socket inventory: ${result.tcpListenerPorts.size} TCP listeners, " +
                     "${result.unixSocketNames.size} named Unix sockets, " +
                     "complete=${result.complete} in ${result.durationMs}ms"
             )

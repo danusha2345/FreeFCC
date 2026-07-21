@@ -1,5 +1,19 @@
 # История изменений
 
+## 1.5.41 — 2026-07-21
+
+- После первого live inventory RC2 удалён активный localhost connect-scan:
+  `/proc/net/tcp*` на пульте доступен и уже содержит полный список listeners,
+  поэтому даже zero-payload подключения к DJI proxy больше не выполняются.
+- `local_socket_inventory` теперь полностью пассивен и возвращает
+  `inventory_method=proc_net_passive`, `probe_attempted=false`, отдельный
+  `inventory_complete`, TCP listener ports и структурированные Unix
+  type/state/inode/name.
+- На RC2 подтверждены внутренние TCP `5744`, `8901`, `40007`, новый `40008`,
+  `40009`; внешний `8902`; GPS daemon ownership у `5744`; LTE/liveview и девять
+  DUSS/WLM Unix endpoints. Неизвестным endpoints протокол не приписывается без
+  отдельного passive evidence.
+
 ## 1.5.40 — 2026-07-21
 
 - Добавлена ручная LAN-команда `local_socket_inventory`: один bounded проход

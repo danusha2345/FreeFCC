@@ -4,7 +4,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
-import java.net.ServerSocket
 import java.nio.file.Files
 
 class LocalSocketInventoryTest {
@@ -27,37 +26,46 @@ class LocalSocketInventoryTest {
     }
 
     @Test
-    fun parsesNamedUnixSocketsOnly() {
+    fun parsesNamedUnixSocketsWithMetadata() {
         val table = """
             Num RefCount Protocol Flags Type St Inode Path
             0001: 00000002 00000000 00010000 0002 01 123 @/duss/mb/0x205
             0002: 00000002 00000000 00000000 0001 01 124
         """.trimIndent()
 
-        assertEquals(
-            listOf("@/duss/mb/0x205"),
-            LocalSocketInventory.parseUnixSocketNames(table)
-        )
+        val socket = LocalSocketInventory.parseUnixSockets(table).single()
+
+        assertEquals("@/duss/mb/0x205", socket.name)
+        assertEquals("00010000", socket.flagsHex)
+        assertEquals("0002", socket.typeHex)
+        assertEquals("01", socket.stateHex)
+        assertEquals(123L, socket.inode)
     }
 
     @Test
-    fun oneShotProbeFindsListenerWithoutSendingPayload() {
-        ServerSocket(0).use { server ->
-            val procRoot = Files.createTempDirectory("empty-proc-net").toFile()
-            try {
-                val result = LocalSocketInventory.capture(
-                    ports = server.localPort..server.localPort,
-                    connectTimeoutMs = 100,
-                    totalBudgetMs = 1_000,
-                    procRoot = procRoot
-                )
+    fun passiveInventoryUsesProcTablesWithoutConnectProbe() {
+        val procRoot = Files.createTempDirectory("proc-net-fixture").toFile()
+        try {
+            File(procRoot, "tcp").writeText(
+                "sl local_address rem_address st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode\n" +
+                    "0: 0100007F:9C47 00000000:0000 0A 0:0 00:0 0 1000 0 12345\n"
+            )
+            File(procRoot, "tcp6").writeText("sl local_address rem_address st\n")
+            File(procRoot, "udp").writeText("sl local_address rem_address st\n")
+            File(procRoot, "udp6").writeText("sl local_address rem_address st\n")
+            File(procRoot, "unix").writeText("Num RefCount Protocol Flags Type St Inode Path\n")
 
-                assertEquals(listOf(server.localPort), result.openTcpPorts)
-                assertEquals(1, result.scannedPorts)
-                assertTrue(result.complete)
-            } finally {
-                procRoot.deleteRecursively()
-            }
+            val result = LocalSocketInventory.capture(procRoot = procRoot)
+
+            assertEquals(listOf(40_007), result.tcpListenerPorts)
+            assertTrue(result.complete)
+            assertTrue(result.errors.isEmpty())
+            val json = result.asJsonFields().toMap()
+            assertEquals(false, json["probe_attempted"])
+            assertEquals(0, json["probe_payload_bytes"])
+            assertEquals(0, json["scanned_ports"])
+        } finally {
+            procRoot.deleteRecursively()
         }
     }
 }
