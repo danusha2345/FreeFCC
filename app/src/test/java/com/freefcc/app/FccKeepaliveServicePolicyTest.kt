@@ -33,23 +33,32 @@ class FccKeepaliveServicePolicyTest {
     }
 
     @Test
-    fun automaticApplyWaitsForPostHomePointRegionSettle() {
-        assertEquals(2_000L, FccKeepaliveService.POST_HOME_POINT_SETTLE_DELAY_MS)
+    fun autoModesDecodeFailClosedToHomePointText() {
+        assertEquals(
+            AutoFccMode.HOME_POINT_TEXT,
+            AutoFccMode.fromWireValue("home_point_text")
+        )
+        assertEquals(AutoFccMode.PERIODIC_5S, AutoFccMode.fromWireValue("periodic_5s"))
+        assertEquals(AutoFccMode.HOME_POINT_TEXT, AutoFccMode.fromWireValue("unknown"))
+        assertEquals(AutoFccMode.HOME_POINT_TEXT, AutoFccMode.fromWireValue(null))
+        assertEquals(
+            AutoFccMode.PERIODIC_5S,
+            FccKeepaliveService.deliveredAutoMode(
+                FccKeepaliveService.ACTION_START,
+                "periodic_5s"
+            )
+        )
+        assertNull(
+            FccKeepaliveService.deliveredAutoMode(
+                FccKeepaliveService.ACTION_STOP,
+                "periodic_5s"
+            )
+        )
     }
 
     @Test
-    fun rcPro2UsesPinnedBroadTelemetryPortForHomePoint() {
-        assertEquals(40009, FccKeepaliveService.selectHomePointMonitorPort("rc520", 40009))
+    fun periodicModeUsesFiveSecondTicks() {
+        assertEquals(5_000L, FccKeepaliveService.PERIODIC_INTERVAL_MS)
     }
 
-    @Test
-    fun otherControllersKeepUsingPort40007ForHomePoint() {
-        assertEquals(40007, FccKeepaliveService.selectHomePointMonitorPort("rc331", 40009))
-        assertEquals(40007, FccKeepaliveService.selectHomePointMonitorPort("rc520", null))
-    }
-
-    @Test
-    fun homePointStreamRetriesEveryTenSeconds() {
-        assertEquals(10_000L, FccKeepaliveService.STREAM_RETRY_DELAY_MS)
-    }
 }

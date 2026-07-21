@@ -234,13 +234,22 @@ private fun FccPage(state: AppState, viewModel: FccViewModel) {
                     ProgressDisplay(state.busyProgress, state.message)
                 }
                 !state.isConnected -> {
-                    val connectLabel = if (state.status == "monitor_failed") "Retry Auto FCC" else "Auto FCC"
                     if (state.message.isNotEmpty()) {
                         BodyText(state.message)
                         Spacer(Modifier.height(8.dp))
                     }
-                    GlowButton(connectLabel, Cyan, enabled = !state.isHardwareBusy) {
-                        viewModel.connect(launchFlightAppAfterConnect = true)
+                    GlowButton("Auto FCC — Home Point", Cyan, enabled = !state.isHardwareBusy) {
+                        viewModel.connect(
+                            launchFlightAppAfterConnect = true,
+                            autoMode = AutoFccMode.HOME_POINT_TEXT
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    GlowButton("Auto FCC — every 5 sec", Amber, filled = false, enabled = !state.isHardwareBusy) {
+                        viewModel.connect(
+                            launchFlightAppAfterConnect = true,
+                            autoMode = AutoFccMode.PERIODIC_5S
+                        )
                     }
                     Spacer(Modifier.height(8.dp))
                     GlowButton("Send FCC Request", Cyan, filled = false, enabled = !state.isHardwareBusy) {
@@ -248,7 +257,7 @@ private fun FccPage(state: AppState, viewModel: FccViewModel) {
                     }
                 }
                 state.isKeepaliveRunning -> {
-                    BodyText("Waiting for current Home Point. FCC will be applied automatically.", Amber)
+                    BodyText("Auto FCC is active. Manual send is hidden until cancellation.", Amber)
                     Spacer(Modifier.height(8.dp))
                     GlowButton("Cancel Auto FCC", Red, filled = false) {
                         viewModel.stopKeepalive()
@@ -257,8 +266,18 @@ private fun FccPage(state: AppState, viewModel: FccViewModel) {
                 state.isFccEnabled -> {
                     BodyText("FCC request was written. RF mode is unknown; verify in DJI Fly.", Amber)
                     Spacer(Modifier.height(8.dp))
-                    GlowButton("Auto FCC", Cyan, enabled = !state.isHardwareBusy) {
-                        viewModel.connect(launchFlightAppAfterConnect = true)
+                    GlowButton("Auto FCC — Home Point", Cyan, enabled = !state.isHardwareBusy) {
+                        viewModel.connect(
+                            launchFlightAppAfterConnect = true,
+                            autoMode = AutoFccMode.HOME_POINT_TEXT
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    GlowButton("Auto FCC — every 5 sec", Amber, filled = false, enabled = !state.isHardwareBusy) {
+                        viewModel.connect(
+                            launchFlightAppAfterConnect = true,
+                            autoMode = AutoFccMode.PERIODIC_5S
+                        )
                     }
                     Spacer(Modifier.height(8.dp))
                     GlowButton(fccPresentation.primaryActionLabel, Red, enabled = !state.isHardwareBusy) { viewModel.disableFcc() }
@@ -277,17 +296,19 @@ private fun FccPage(state: AppState, viewModel: FccViewModel) {
                         BodyText("Send the FCC request, then verify RF mode in DJI Fly.")
                         Spacer(Modifier.height(8.dp))
                     }
-                    if (state.status == "monitor_failed") {
-                        GlowButton("Retry Home Point", Cyan, enabled = !state.isHardwareBusy) {
-                            viewModel.startKeepalive()
-                        }
-                        Spacer(Modifier.height(8.dp))
+                    GlowButton("Auto FCC — Home Point", Cyan, enabled = !state.isHardwareBusy) {
+                        viewModel.startKeepalive(AutoFccMode.HOME_POINT_TEXT)
                     }
+                    Spacer(Modifier.height(8.dp))
+                    GlowButton("Auto FCC — every 5 sec", Amber, filled = false, enabled = !state.isHardwareBusy) {
+                        viewModel.startKeepalive(AutoFccMode.PERIODIC_5S)
+                    }
+                    Spacer(Modifier.height(8.dp))
                     GlowButton(fccPresentation.primaryActionLabel, Cyan, enabled = !state.isHardwareBusy) { viewModel.enableFcc() }
                 }
             }
 
-            if (state.aircraftSerial.isNotEmpty()) {
+            if (state.isConnected) {
                 Spacer(Modifier.height(8.dp))
                 SerialRow(state.aircraftSerial, enabled = !state.isHardwareBusy) { viewModel.probeSerial() }
             }
@@ -297,16 +318,16 @@ private fun FccPage(state: AppState, viewModel: FccViewModel) {
 
         GlowCard {
             Text(
-                "Home Point event test",
+                "DJI Fly Home Point access",
                 color = TextWhite,
                 fontSize = 16.sp,
                 fontWeight = FontWeight.SemiBold
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                "Enable FreeFCC Home Point Test, then switch to the original DJI Fly. " +
-                    "This only records Home Point events and visible DJI Fly text once per second; " +
-                    "it sends no FCC commands. Do not start Auto FCC during this test.",
+                "Enable FreeFCC Home Point Test once. Auto FCC — Home Point then waits for " +
+                    "the localized Home Point text in the original DJI Fly and sends one full FCC profile. " +
+                    "Accessibility itself does not open DUML connections.",
                 color = TextGray,
                 fontSize = 12.sp,
                 lineHeight = 17.sp
@@ -1025,6 +1046,7 @@ private fun BodyText(text: String, color: Color = TextGray) {
 @Composable
 private fun SerialRow(serial: String, enabled: Boolean = true, onRefresh: () -> Unit) {
     val identityLabel = if (serial.startsWith("W")) "Model: " else "S/N: "
+    val identityValue = serial.ifEmpty { "Not detected — tap refresh" }
     Surface(
         color = BgLight.copy(0.4f),
         shape = RoundedCornerShape(10.dp),
@@ -1038,7 +1060,7 @@ private fun SerialRow(serial: String, enabled: Boolean = true, onRefresh: () -> 
             Spacer(Modifier.width(10.dp))
             Text(identityLabel, color = TextGray, fontSize = 12.sp)
             Text(
-                serial,
+                identityValue,
                 color = TextWhite,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.SemiBold,

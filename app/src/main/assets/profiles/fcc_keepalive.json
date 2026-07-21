@@ -1,6 +1,6 @@
 {
   "name": "Legacy FCC Keepalive",
-  "description": "Retained as a reverse-engineering reference only. The runtime no longer sends this four-frame profile; the one-shot listener waits for Home Point and applies the complete FCC profile once.",
+  "description": "Original upstream four-frame FCC keepalive. Used only by the explicit five-second periodic Auto FCC mode after one complete profile apply.",
   "sender": 130,
   "sender_desc": "MOBILE_APP, index 4",
   "cmd_type": 32,

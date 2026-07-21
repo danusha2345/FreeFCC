@@ -30,8 +30,8 @@ private data class DjiFlyPhraseCatalog(
 )
 
 /**
- * Diagnostic-only listener for text emitted by the original DJI Fly app.
- * It never opens a DUML socket and never sends an FCC command.
+ * Reads text emitted by the original DJI Fly app. The accessibility service
+ * never opens DUML itself; an armed Home Point match signals Auto FCC once.
  */
 class DjiFlyAccessibilityService : AccessibilityService() {
 
@@ -52,6 +52,8 @@ class DjiFlyAccessibilityService : AccessibilityService() {
     private var lastLoggedAtMs = 0L
     private var lastUiSnapshot = ""
     private var lastUiScanAtMs = 0L
+    private var lastUiHomePointMatch = ""
+    private var lastUiHomePointMatchAtMs = 0L
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -60,7 +62,7 @@ class DjiFlyAccessibilityService : AccessibilityService() {
         FccViewModel.logServiceEvent(
             "DJI FLY ACCESSIBILITY TEST: connected; " +
                 "phrases=${catalog.phrases.size} locales=${catalog.localeCount}; " +
-                "no DUML reads or FCC writes"
+                "no DUML reads while waiting"
         )
     }
 
@@ -91,9 +93,7 @@ class DjiFlyAccessibilityService : AccessibilityService() {
                     "home_point_match=$matched text=$safeText"
             )
             if (matched) {
-                FccViewModel.logServiceEvent(
-                    "DJI FLY ACCESSIBILITY TEST: HOME POINT MATCH; diagnostic only, FCC not sent"
-                )
+                handleHomePointMatch("event", value)
             }
         }
     }
@@ -106,11 +106,31 @@ class DjiFlyAccessibilityService : AccessibilityService() {
         val root = rootInActiveWindow ?: return
         val labels = collectVisibleLabels(root)
         if (labels.isEmpty()) return
+        val homePointText = labels.firstOrNull { value ->
+            DjiFlyHomePointMatcher.matches(value, homePointPhrases)
+        }
         val snapshot = labels.joinToString(" | ").take(1_500)
         if (snapshot == lastUiSnapshot) return
         lastUiSnapshot = snapshot
         FccViewModel.logServiceEvent(
-            "DJI FLY ACCESSIBILITY UI: text=$snapshot"
+            "DJI FLY ACCESSIBILITY UI: home_point_match=${homePointText != null} text=$snapshot"
+        )
+        if (homePointText != null) {
+            val normalized = DjiFlyHomePointMatcher.normalize(homePointText)
+            if (normalized != lastUiHomePointMatch || now - lastUiHomePointMatchAtMs >= 10_000L) {
+                lastUiHomePointMatch = normalized
+                lastUiHomePointMatchAtMs = now
+                handleHomePointMatch("visible_ui", homePointText)
+            }
+        }
+    }
+
+    private fun handleHomePointMatch(source: String, value: CharSequence) {
+        val accepted = FccKeepaliveService.notifyHomePointDetected()
+        FccViewModel.logServiceEvent(
+            "DJI FLY ACCESSIBILITY TEST: HOME POINT MATCH source=$source " +
+                "auto_fcc_trigger_accepted=$accepted " +
+                "text=${value.toString().replace(Regex("\\s+"), " ").take(240)}"
         )
     }
 

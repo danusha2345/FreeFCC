@@ -34,7 +34,7 @@ A free and open-source Android app that unlocks FCC mode, sends experimental 4G 
 | **4G Activation** | Sends 4G activation frames to the aircraft (serial read at runtime) — no status readback, experimental |
 | **LED Control** | Reads the current lamp state and verifies it after LED on/off commands (DJI Fly and a linked aircraft are required) |
 | **Device Info** | Attempts to query hardware and firmware version; response availability depends on the controller/proxy path |
-| **Auto FCC** | Connects, waits for the current recorded Home Point, applies the full FCC profile once, then stops its listener |
+| **Auto FCC** | Offers one-shot DJI Fly Home Point text detection or the original four-frame keepalive every five seconds |
 | **Auto-Updater** | Checks `danusha2345/FreeFCC` GitHub Releases and lets you download/install from the app |
 | **LAN Diagnostic API** | Logs, live status, allowlisted app actions, and raw DUML request/response over HTTP on the controller's RFC1918 Wi-Fi address |
 | **Local by default** | Internet is used for update checks/downloads; the LAN API stays inside the current Wi-Fi subnet and can be disabled in the Log tab |
@@ -80,20 +80,19 @@ The captured 4G profile is experimental and was derived from systems using exter
 
 Validated upstream on DJI RC2 firmware v10.00.0700; this fork was additionally exercised live on RC2 `rc331`. Future firmware can change the local proxy or DUML routing, so compatibility must be rechecked rather than assumed.
 
-The former two-second FCC keepalive is no longer used. After a successful
-**Auto FCC** Connect, FreeFCC opens one read-only model-selected listener: RC Pro 2
-(`rc520`) uses the exact port pinned by Connect, while the currently validated
-RC2 path uses `40007`. The listener sends no primer, query, or refresh frames.
-Its incremental parser accepts CRC-valid passive `03:44` from both direct DUML
-and the `55 cc 30 75` envelope. The push reports the current Home Point state;
-when it is recorded, FreeFCC closes the listener, waits two seconds for regional
-initialization to settle, rebuilds the complete 21-frame × 2-round profile, and
-sends it on the exact DUML port found by **Auto FCC** Connect. A prior `not recorded`
-state is not required. If the telemetry stream closes before Home Point, the
-listener retries after ten seconds and continues until Home Point or explicit
-cancellation. Waiting can be cancelled from the FCC page or the foreground
-notification. Same-port sessions are serialized so LAN diagnostics and FCC
-writes cannot overlap the listener.
+**Auto FCC — Home Point** connects once, switches focus to the original DJI Fly,
+and waits for its localized Home Point text through Android Accessibility. It
+does not open a DUML socket while waiting. After an exact phrase match it sends
+the complete 21-frame × 2-round FCC profile once on the port pinned by Connect,
+then stops. Enable **FreeFCC Home Point Test** once in Android Accessibility
+settings before using this mode.
+
+**Auto FCC — every 5 sec** is the explicit legacy alternative. It sends the
+complete profile once, then sends the original upstream four-frame
+`fcc_keepalive.json` every five seconds until **Cancel Auto FCC**. During either
+Auto mode the manual action is hidden and cancellation remains available in the
+app and foreground notification. **Send FCC Request** remains a one-shot manual
+full-profile action.
 
 If you test it on a model or firmware version not listed here, please [open an issue](https://github.com/danusha2345/FreeFCC/issues) and let me know.
 
@@ -140,18 +139,16 @@ Swipe from the right edge to open ATV Launcher. Open the Files app, find your fo
 
 ## How to Use
 
-For the isolated RC2 Home Point text test in v1.5.30, open FreeFCC, tap
-**Open Accessibility Settings**, enable **FreeFCC Home Point Test**, and switch
-to the original DJI Fly. Do not start **Auto FCC** during this test. The service
-reads only accessibility events and visible text from `dji.go.v5`, loads Home
-Point phrases from every locale present in the installed DJI Fly, and sends no
-FCC or DUML traffic. Return to the FreeFCC **Log** tab after Home Point is
-recorded and look for `HOME POINT MATCH`.
+Before the first **Auto FCC — Home Point** run, tap **Open Accessibility
+Settings** and enable **FreeFCC Home Point Test**. The service reads only
+accessibility events and visible text from `dji.go.v5`, and loads Home Point
+phrases from every locale present in the installed DJI Fly. Reading the screen
+does not open DUML; an armed Home Point match triggers one full FCC apply.
 
 1. Power on the drone and link it to the controller
-2. Open FreeFCC and tap **Auto FCC**
-3. After a successful controller connection and monitor start, FreeFCC switches focus to DJI Fly. In the background it waits until a valid current Home Point status is `recorded`, allows two seconds for regional setup to settle, then sends the full FCC profile once. Use **Send FCC Request** directly below **Auto FCC** to bypass Home Point waiting. While Auto FCC is active, the manual button is hidden and only **Cancel Auto FCC** is shown; cancelling returns to the manual action.
-   After replacing the aircraft battery without restarting the controller, tap **Auto FCC** again from the previous FCC-request result screen to wait for the new flight session's Home Point.
+2. Choose **Auto FCC — Home Point**, **Auto FCC — every 5 sec**, or the one-shot **Send FCC Request**.
+3. Home Point mode switches focus to DJI Fly and sends the full profile once when its localized Home Point text appears. Five-second mode sends the full profile once and then the original four-frame keepalive until cancellation. While either Auto mode is active, only **Cancel Auto FCC** is shown instead of the manual action.
+   After replacing the aircraft battery without restarting the controller, start the preferred Auto mode again for the new flight session.
 4. For 4G diagnostics, tap **Probe 4G Endpoint** first. This is read-only and only checks whether `/duss/mb/0x205` is reachable. **Send 4G Activation Frames** remains experimental and confirms writes only, not activation.
    > **Note:** The integrated eSIM path on DJI Avata 360 is not yet proven compatible with the captured external-module profile. Please attach the LAN logs to an [issue](https://github.com/danusha2345/FreeFCC/issues) when testing.
 5. To request CE restore, tap **Send CE Restore**. The app confirms transport writes only; verify the actual RF mode in DJI Fly.
@@ -231,7 +228,15 @@ The frame format is:
 - `dst = 238` (0xEE, OFDM_GROUND index 7)
 - `payload = 000000 + ASCII(aircraft_serial)`
 
-The aircraft identity is probed by listening on the detected DUML TCP port for telemetry data. The preferred format is a full `1581...` factory serial. The parser also recognizes the 16-character RC2 telemetry suffix beginning with `FA` for display and falls back to the 5-character model pattern `W[AM]xxx` (for example `WA341` or `WM630`). Only a full `1581...` serial or an allowlisted `WA/WM` model code is accepted by the 4G flow; the standalone `FA...` suffix is deliberately display-only because fabricating the missing prefix would be unsafe. The last identity is cached for display, but serial-specific 4G sending requires it to be freshly observed in the current process so a previous aircraft's cached value is not reused blindly.
+The aircraft identity is probed with one bounded passive read on `40007`, where
+RC2 hardware evidence exposes the full factory serial in `51:14`. A live audit
+found only controller identity on `40009`/`8901` and no frames on `8902..8904`.
+The preferred format is a full `1581...` factory serial. The parser also
+recognizes the 16-character RC2 telemetry suffix beginning with `FA` for display
+and falls back to a 5-character `W[AM]xxx` model pattern. Only a full `1581...`
+serial or an allowlisted `WA/WM` code is accepted by the 4G flow. The last value
+is cached for display, but 4G requires a freshly observed current-aircraft
+identity.
 
 The `/duss/mb/0x205` pre-check proves only local route availability. It does not distinguish an external Cellular Dongle from an integrated eSIM module and does not validate model-specific payload semantics.
 
@@ -269,7 +274,7 @@ The frames are plaintext on the local socket with no encryption. Once captured, 
 app/src/main/
   assets/profiles/
     fcc.json          21 frames, FCC unlock
-    fcc_keepalive.json legacy 4-frame research profile (not used at runtime)
+    fcc_keepalive.json original 4-frame profile used by five-second Auto FCC
     ce_restore.json    1 experimental default-region request
     4g.json           128 frames, 4G activation
     device_info.json   1 frame, version inquiry
@@ -279,9 +284,9 @@ app/src/main/
     DumlTransport.kt  Frame builder, incremental parser + bounded socket I/O
     DumlPortSessionLock.kt Per-port exclusion for localhost DUML sessions
     FccRuntime.kt      Process-local FCC write and monitor runtime evidence
-    HomePointMonitor.kt One-connection direct/wrapped 03:44 listener
+    HomePointMonitor.kt Retained direct/wrapped 03:44 RE parser and tests
     LedReadback.kt      Strict 03:F8 lamp-state decoding
-    FccKeepaliveService.kt Foreground Home Point wait + one full FCC apply
+    FccKeepaliveService.kt Text-triggered one-shot + five-second periodic Auto FCC
     LanControl.kt      LAN command validation and JSON encoding
     NetworkLogServer.kt Private-Wi-Fi logs/status/command HTTP API
     Profiles.kt        JSON profile loader

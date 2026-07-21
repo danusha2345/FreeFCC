@@ -57,9 +57,11 @@ curl -sS -X POST \
 
 Available actions are returned by `/api/commands`. Long-running application
 actions return HTTP `202 Accepted`; poll `/api/status` and `/logs` for their
-result. A successful `connect` automatically starts the one-shot Home Point
-wait; explicit wait start/stop actions and the legacy `keepalive_start/stop`
-aliases remain available for diagnostics. The list also includes FCC/CE, LED,
+result. A successful LAN `connect` starts the default DJI Fly Home Point text
+wait; the Accessibility service must already be enabled. Explicit wait
+start/stop actions and the legacy `keepalive_start/stop` aliases select the same
+default text mode. The five-second legacy mode is currently a local UI action.
+The list also includes FCC/CE, LED,
 device info, serial and 4G probes, updater actions, and flight-app launch. Busy
 hardware returns `409`; commands that require a prior controller connection or
 update check return `412`.
@@ -69,10 +71,10 @@ provide a physical RF-region readback. `fcc_sequence_written` and
 `fcc_last_write_at_ms` describe only a successful profile write in the current
 app process. The `fcc_last_attempt_*` fields report origin, exact port,
 timestamps, expected/flushed writes and matching ACK count; the
-`fcc_auto_*` fields retain the last automatic Home Point attempt even after a
-manual retry. `home_point_monitor_running` is the observed one-shot listener
-lifecycle, while `home_point_monitor_requested` records an in-progress wait.
-The old `keepalive_*` fields remain as compatibility aliases.
+`fcc_auto_*` fields retain the last automatic attempt even after a manual retry.
+The historical `home_point_monitor_*` and `keepalive_*` fields are compatibility
+aliases for the active foreground Auto FCC lifecycle; they no longer imply a
+DUML Home Point listener.
 
 ## Raw DUML
 
@@ -161,10 +163,10 @@ Only one LAN diagnostic operation (`duml_send`, `duml_request`, `duml_capture`,
 or `wire_exchange`) may run at a time; another returns `409 diagnostic_busy`.
 For request/response operations the hardware write gate is released immediately
 after `flush()`, while the response continues on the original socket. The Home
-Point listener and supported LED actions additionally share a process-wide
-port-`40007` lease. Every long-lived localhost operation also owns a lease for
-its exact DUML port, so diagnostics never overlap Home Point monitoring or an
-FCC/CE write on the same proxy. A conflicting request returns
+Serial/identity probes and supported LED actions additionally share a
+process-wide port-`40007` lease. Every long-lived localhost operation also owns
+a lease for its exact DUML port, so diagnostics never overlap another serial,
+LED, or FCC/CE operation on the same proxy. A conflicting request returns
 `409 duml_port_busy`.
 
 ## Exact raw wire exchange
