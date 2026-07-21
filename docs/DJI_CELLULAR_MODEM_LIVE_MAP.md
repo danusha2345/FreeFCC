@@ -17,7 +17,118 @@
 | Fibocom USB profile `30` | OBSERVED | Только закрытые/vendor AT-интерфейсы; host network interface отсутствует |
 | Fibocom USB profile `31` | OBSERVED | Добавляется CDC ECM (`cdc_ether`); после `GTRNDIS=1,1` работает host networking |
 | eSIM-устройство с двумя Quectel/QDC535EA functions | OBSERVED | Одинаковые firmware/USB identity, разные встроенные UICC/eUICC-профили, обе functions были без packet attach в РФ |
+| Оба модема внутри RC Pro 2 `rc520` | OBSERVED | `dji_lte` автоматически различает dual/QDC535EA и Fibocom `dji_mini`, создаёт разные UART workers и сохраняет общий DJI LTE service path |
+| RC Pro 2 + Fibocom/Yota без модема в aircraft | OBSERVED + PHYSICAL REPORT | Наземная SIM зарегистрирована в LTE, но WLM остаётся `lte_conn=0`; это ожидаемый half-link, а не доказательство отказа модема пульта |
 | OpenFCC desktop launcher | OBSERVED | Отдельный controller OTA flow; не является AT-активацией USB-модема |
+
+## Live-интеграция на RC Pro 2
+
+### Scope и физическая топология
+
+Пассивный ADB-съём выполнен 2026-07-21 на RC Pro 2 `rc520`, Android 11,
+controller build `V55.31.05.76/576`. Aircraft определялся как Air 3S `WA234`
+и был связан с пультом по SDR.
+
+Пользователь отдельно подтвердил физическую топологию: оба проверенных модема
+последовательно устанавливались **в пульт**, а в aircraft модема во время этого
+съёма не было. В пульт не отправлялись AT, DUML или LTE control commands;
+читались только `proc`, `sysfs`, Android services, kernel/logcat и штатные
+конфигурации.
+
+### Timeline замены модемов
+
+| Время MSK | Уровень | Событие |
+|---|---|---|
+| `23:31:09` | OBSERVED | Внутренний hub `1a86:8091` перечислил две функции `2ecc:3001` |
+| `23:31:18–19` | OBSERVED | Обе функции сменились на `2ca3:4010`; появились `ttyUSB0..5`, а `dji_lte` создал два набора `modem_dual_send/parse/ping` workers |
+| `23:31:25–27` | OBSERVED | Android загрузил два китайских SIM-профиля; оба остались без регистрации и packet data, а per-subscription `mobile_data1/2` были `0` |
+| `23:35:43` | OBSERVED | Все шесть dual-modem UART исчезли после физического извлечения первого модема |
+| `23:36:18–19` | OBSERVED | Fibocom/Baiwang появился как один `2ca3:4009`: `ttyUSB0..3`, `cdc_ether`, `usb0`; `dji_lte` создал `modem_mini_send/parse/ping` workers |
+| `23:36:22` | OBSERVED | Android загрузил физическую Yota SIM как единственную активную подписку и назначил её default data/voice/SMS |
+| `23:37:13` | OBSERVED | Примерно через `54.65 s` после USB attach Yota перешла в `IN_SERVICE`; LTE RSSI был около `-83 dBm`, но через `66 ms` framework снова сообщил data `DISCONNECTED` |
+| `23:43:41` | OBSERVED | Повторный stable snapshot сохранил `IN_SERVICE`, LTE RSSI `-77 dBm`, но Android data и DJI WLM всё ещё оставались disconnected |
+
+Это две разные физические модемные конфигурации. Переход
+`2ca3:4010 -> 2ca3:4009` нельзя интерпретировать как USB mode switch одного
+модема.
+
+### Android bearer и DJI link — разные состояния
+
+После стабилизации Fibocom/Yota одновременно наблюдались:
+
+| Слой | Live state | Вердикт |
+|---|---|---|
+| SIM | `LOADED`, physical subscription, default subId выбран правильно | Наземная SIM готова |
+| Radio registration | LTE `IN_SERVICE`, home network Yota, packet service advertised | Модем зарегистрирован в сети |
+| Android setting | `mobile_data=1` | Data не отключена пользовательской настройкой |
+| Android data connection | `mDataConnectionState=0`, `maxDataCalls=0`, `maxActiveData=0`; cellular `NetworkAgent` отсутствует | Обычный Android IP bearer не поднят |
+| USB network | `usb0`, `192.168.50.1/32`, локальный route `192.168.50.0/24`; default route остаётся на Wi-Fi | Это modem-local interface, не подтверждённый Internet bearer |
+| DJI WLM | `lk_state_sdr=1`, `lte_conn=0`, `lte_usable=0`, `use_lte=0`, `dev_lte_conn=disconnect` | End-to-end aircraft LTE link отсутствует |
+
+У старого dual/QDC535EA модема generic `mobile_data=1` сочетался с
+`mobile_data1=0` и `mobile_data2=0`; radio log прямо показывал
+`DATA_DISABLED`/`isUserDataEnabled=false`. После замены на Yota система создала
+новый subId, назначила его default и записала `mobile_data3=1`. Поэтому
+состояние data нельзя переносить с одного физического модема на другой только
+по generic setting.
+
+DERIVED: при физически отсутствующем aircraft-модеме нулевой DJI LTE link
+является ожидаемым half-link состоянием. Этот тест подтверждает распознавание и
+сетевую регистрацию модема пульта, но не может проверить pairing, encrypted
+session или Enhanced Transmission между двумя LTE endpoints.
+
+NEGATIVE: в проверенном окне не было перехода WLM в LTE, LTE traffic allocation
+или переключения liveview/download с SDR. Это не указывает на ошибку Yota SIM,
+поскольку обязательный воздушный peer отсутствовал.
+
+HYPOTHESIS: Android bearer может блокироваться vendor RIL policy/capability
+(`maxDataCalls=0`/`maxActiveData=0`) либо обслуживаться отдельно внутри
+`dji_lte`. Capture доказывает `DISCONNECTED` и отсутствие Cellular
+`NetworkAgent`, но не точную внутреннюю ветку vendor RIL.
+
+### Штатный LTE service path RC Pro 2
+
+Публичная `/system/etc/lte_cfg.json` и runtime согласуются между собой:
+
+- service role: `gnd`, device: `rc`, product: `RC520`;
+- `dji_lte` service host: `0x0e06`, `dji_wlm`: `0x0e07`;
+- local router host: `0x0205`, app host: `0x0200`, peer LTE host: `0x0806`;
+- разрешены два modem instances и channels `VIDEO0/1`, `CTRL0/1`,
+  `DOWNLOAD0`;
+- pairing настроен `by_sdr`, поэтому SDR является управляющим каналом для
+  сборки LTE pair;
+- live Unix endpoints включали `/dev/dji_lte_v1`, `/dev/wl_lte_v1`,
+  `/duss/mb/0xe06`, `/duss/mb/0xe07` и `/duss/mb/0x205`;
+- process threads подтверждают отдельные `pairing_task`, relay/session workers,
+  `gnd_rc_lte_*` workers и modem-specific send/parse/ping workers.
+- `dji_lte` ELF содержит точные anchors `usb:v2CA3p4009`, `dji_mini_net`,
+  `/dev/ttyUSB2` и `ril.fibocom.NetifName`; literal `2CA3p4010` в этом ELF не
+  найден, поэтому поддержка dual-модема приходит через другие runtime/RIL
+  компоненты либо таблицу без такого текстового идентификатора.
+
+DERIVED: `/duss/mb/0x205` — доступный local router endpoint, но его наличие не
+доказывает ни SIM attach, ни наличие aircraft-модема, ни созданную LTE pair.
+Именно поэтому успешная запись текущего FreeFCC 4G profile сама по себе не
+может считаться активацией Enhanced Transmission.
+
+### Corpus и privacy
+
+Raw corpus хранится только в ignored directory
+`.scratch/rc-pro2-modem-20260721/`. Он содержит device/SIM/aircraft identifiers
+и не должен публиковаться без редактирования.
+
+| Artifact | SHA-256 |
+|---|---|
+| RC Pro 2 `lte_cfg.json` | `882249a0b1156b8f49f5a96070db2dd6de165ab43c45e3d68faa7b5b8ef5d06d` |
+| RC Pro 2 `dji_lte` ELF | `6788276b77649e6717227ba6d70792d97fdcf135999b425b56af43db1546e8ec` |
+| RC Pro 2 `dji_wlm` ELF | `0d62e3b3cf368de1fc7d019debfb60457765c4a68289eeaef48988967a0b7220` |
+| Passive local socket inventory | `636234510c3e4c029ff094f2ff1394e1f4d59769e57cd155dfe126ae8a29fa33` |
+| Post-swap kernel log | `3cdd27d538bf3c9f63ecaa896bd1efa15f5e22bf175e9308e1bf4b452057de07` |
+| Fibocom/Yota telephony snapshot | `309a3d5956e68acdff7a60748b27247b9eca1227891c13e3153ea35ff6ee88bf` |
+| Post-swap `dji_lte` log | `72a5ef92b43ea43cadadfef8a0a353760a0fae9945c001ceceb0d02251b0391f` |
+| Post-swap `dji_wlm` log | `70bb3b3066d19cba2d765f478adbe4b3840e9298c4880c14f798abe2530b1cbc` |
+| Final stable telephony snapshot | `059affcddcc4e3d95166591a163547d9cc9225fe51a1282653663a59c5a42286` |
+| Final stable DJI LTE/WLM tail | `d9e84e068aa427893d7f1501fa2a70bb6c9da486ba0bdea7cadc94c69a005fb0` |
 
 ## Fibocom NL668T-GL с физической Yota SIM
 
