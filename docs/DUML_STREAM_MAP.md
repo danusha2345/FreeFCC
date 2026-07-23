@@ -1,6 +1,6 @@
 # Карта live DUML-потоков FreeFCC
 
-Дата: 2026-07-20.
+Дата live capture: 2026-07-20. Статический cross-check RM510: 2026-07-23.
 
 Scope: DJI RC2 `rc331` + Avata 360/O4, FreeFCC `1.5.14`, linked aircraft,
 DJI Fly и indoor GPS spoof. Это evidence-карта текущей связки, а не обещание
@@ -130,8 +130,8 @@ FreeFCC request.
 |---|---|---|
 | `03:43` | 85 B; prefix даёт coordinates, GPS used/level, satellite count и GPS state; transition подтверждает динамику полей | OBSERVED + prefix DERIVED |
 | `03:44` | 102 B; coordinates + altitude prefix, `home_state` at offset 20; переход `0x46 → 0x47` | OBSERVED, CONFIRMED transition |
-| `51:04` | 33 B, route `0xEE → App`; штатная cellular/eSIM telemetry | OBSERVED, semantic per-ID UNKNOWN |
-| `51:14` | 51 B, route `0xEE → App`; содержит свежий полный aircraft `1581...` identity | OBSERVED; полный S/N хранится только в ignored raw corpus |
+| `51:04` | 33 B, route `0xEE → App`; firmware function `wlm_push_dev_osd` | OBSERVED + static symbol context |
+| `51:14` | 51 B, route `0xEE → App`; neighbour list `2 + 49 × N`, здесь `N=1`; 23-byte identity region peer содержит полный aircraft `1581...` identity | OBSERVED + static data flow; полный S/N хранится только в ignored raw corpus |
 | `00:81/82` | `rc331` controller identity | OBSERVED |
 | `00:99` | Строки `cam_lens_state`, `cam_stream_status` | OBSERVED camera service telemetry |
 | `02:80` | Legacy name `Camera State Info / Status Push`; current layout надо проверять по длине | OBSERVED + static name |
@@ -140,8 +140,11 @@ FreeFCC request.
 
 `51:14` особенно важен для 4G: направление противоположно FreeFCC activation
 burst (`0xEE → App`, а не `App → 0xEE`) и identity приходит в штатном live
-cellular потоке. Это новый источник свежей aircraft identity, но точное значение
-command ID `0x14` ещё не названо по firmware evidence.
+cellular/link потоке. RM510 `dji_wlm` подтверждает назначение: это
+`wlm_push_neigh_info`, переменный список соседних устройств с их
+SDR/LTE/Wi-Fi state, receive timestamps и link modes. Поэтому наличие serial в
+этом кадре не является признаком срабатывания FreeFCC 4G sweep — это штатное
+описание текущего peer/link topology.
 
 ### Полная частотная картина первых пяти samples
 

@@ -61,14 +61,42 @@ Build ID и кодовые адреса не изменились; в табли
 | `51:04` | `PUSH` | `wlm_push_dev_osd` | `0x5cc1c` | Device OSD/status push | `CONFIRMED` по symbol context |
 | `51:05` | `PUSH` | `wlm_push_link_sw_result2sysmode`; `wlm_inform_route_sw` | `0x5e2c0`, `0x67ec8` | Результат link switch и уведомление route switch | `CONFIRMED` по symbol context |
 | `51:07` | `QUERY` | `__wlm_link_ctl` | `0x670e8` | Link control request; payload ещё не декодирован | `INFERRED` |
-| `51:0C` | `QUERY` | `wlm_link_state_manage_task` | `0x5b6dc` | Одна из двух команд синхронизации/управления link state | `INFERRED` |
-| `51:14` | `QUERY` | `wlm_link_state_manage_task` | `0x5b910` | Вторая команда link-state management; точное отличие от `51:0C` требует разбора payload | `INFERRED` |
+| `51:0C` | `PUSH` | `wlm_link_state_manage_task` | `0x5b910` | Фиксированный 10-байтный local all-link-mode/composite-link-state report | `CONFIRMED` по data flow |
+| `51:14` | `PUSH` | `wlm_link_state_manage_task` | `0x5b6dc` | Переменный neighbour/device-link list: `2 + 49 × N` байт | `CONFIRMED` по data flow и live length |
 | `09:21` | `QUERY` | `wlm_lk_ctrl_set_sdr_param` | `0x645bc`, `0x64620`, `0x64684` | Получение текущего SDR/link состояния; до трёх попыток | `CONFIRMED` для control flow |
 | `09:EC` | `SEND` | `wlm_lk_ctrl_set_sdr_param` | `0x64900`, `0x64974`, `0x649e8` | Wi-Fi/SDR coexistence: `00 03` silence SDR 2.4G, `00 04` silence SDR 5.8G, `00 00` reset/ordinary branch; до трёх попыток при ошибке | `CONFIRMED` |
 | `18:35` | `SEND` | `wlm_select_upgrade_case`; `wlm_capture_dongle_log` | `0x71334`, `0x71564` | Один multiplexed diagnostic/control ID к host `0x0e06`; upgrade-case и capture dongle log различаются payload/action | `CONFIRMED` по двум функциям, payload layout частичный |
 
 `09:EC` вызывается событийно при переключении coexistence/частот. Жёсткого
 цикла «каждые 10 секунд» в этой функции не найдено.
+
+### Link-state payload `51:0C` и `51:14`
+
+В `wlm_link_state_manage_task` базовый raw ID равен `0x0051000c`. Вызов по
+`0x5b910` отправляет его как `51:0C` с фиксированной длиной 10 байт:
+`wlm_get_local_all_lk_mode` и `wlm_get_local_comp_lk_sta` собирают локальные
+режимы/сводное состояние SDR, LTE, Wi-Fi и command/data links.
+
+Для neighbour report код прибавляет к ID `8`, получая `0x00510014`, и вызывает
+отправку по `0x5b6dc`. Payload имеет layout:
+
+| Offset | Размер | Значение |
+|---:|---:|---|
+| `0` | 1 | Число соседних устройств `N` |
+| `1` | 1 | Ноль/reserved |
+| `2 + 49 × i` | 23 | Identity/name region соседнего устройства |
+| `+23` | 2 | LE u16 из peer link-state structure |
+| `+25` | 1 | Peer state/type byte |
+| `+26` | от 3 | Link modes, заполненные `wlm_dev_link_get_lk_mode` |
+| `+29`, `+33`, `+37` | 3 × 4 | Три LE u32 timestamp/age values, исходные значения делятся на 1000 |
+| `+41` | 8 | Нули/reserved |
+
+Размер записи равен 49 байтам, полный размер — `2 + 49 × N`. Live payload
+длиной 51 байт поэтому означает ровно одного соседа. Первые 23 байта записи
+копируются из identity/name region peer structure; это объясняет, почему в
+живом `51:14` присутствует полный aircraft serial. Строка журнала firmware
+называет записи `neighbour` и печатает для них SDR/LTE/Wi-Fi state, receive
+timestamps, command/link/video/data modes.
 
 `wlm_forward_msg_send` — общий forward path: вызывающий передаёт ID во время
 выполнения. Такие команды нельзя честно добавить в таблицу как фиксированные
@@ -84,18 +112,32 @@ Build ID и кодовые адреса не изменились; в табли
 | `00:32` | `PUSH` | `dji_command_active_auth_push` | `0x1c514` | Activation authorization push; тот же ID, другой payload path | `CONFIRMED` по symbol context |
 | `06:C4` | `SEND` | `dji_command_deactive_wipe_data` | `0x1c6a8` | Deactivation/data-wipe command | `CONFIRMED` по symbol context |
 | `06:A5` | `QUERY` | `dji_command_set_mcu_active` | `0x1c7d4` | Установка MCU active state/flag | `CONFIRMED` по symbol context |
-| `18:39` | `SEND` | `send_fusion_info_to_lte` | `0x1cb8c` | Fusion info в LTE service, destination `0x0e06` | `CONFIRMED` |
-| `51:10` | `SEND` | `send_lte_info_to_wlm` | `0x1ccb4` | LTE info в WLM, destination `0x0e07` | `CONFIRMED` |
+| `18:39` | `SEND` | `send_fusion_info_to_lte` | `0x1cb8c` | 27-байтный sparse report с тремя WLM link-ratio в LTE service, destination `0x0e06` | `CONFIRMED` по data flow |
+| `51:10` | `SEND` | `send_lte_info_to_wlm` | `0x1ccb4` | 34-байтный LTE channel-state block в WLM, destination `0x0e07` | `CONFIRMED` по data flow |
 | `0200:0D05` | `EXTENDED/QUERY` | `secure_open_debug_auth` | `0x1e844` | Внутренняя secure debug authorization | `CONFIRMED` по symbol context; wire layout расширенный |
 
 `dlink_forward_message_with_no_ack` и `duss_send_pack` также принимают
 команду во время выполнения. Наличие вызова wrapper не раскрывает полный набор
 пересылаемых ID.
 
+`18:39` формируется после успешного `libwlm_channel_get_param`. Payload заранее
+обнуляется, затем три ratio записываются в offsets `0`, `6` и `3`, а ещё один
+state byte — в offset `25`; длина всегда 27 байт. Функция вызывается из
+`sys_process_cb` и `dji_stream_recv_task`, то есть это event/stream-side
+синхронизация WLM → LTE, а не периодический FCC keepalive.
+
+`51:10` копирует ровно 32 последовательных байта из LTE stream structure и
+добавляет LE u16, получая длину 34 байта. В начале блока firmware отдельно
+логирует `chan_num` и четыре соседних u16 values. Вызов находится в
+`dji_send_stream_via_localsocket` и выполняется только для активного LTE
+stream path. Точные имена всех полей без type information пока не
+восстановлены.
+
 ## `dji_sdrs_agent`
 
 | Команда | Тип | Функция | Call site | Что делает | Уровень |
 |---|---|---|---:|---|---|
+| `00:0100` | `EXTENDED/HANDLER` | `sa_event_ping` | registration `0x229a0`, create `0x229ac` | Эхо входного payload без изменения | `CONFIRMED`; raw ID `0x00000100` |
 | `07:A120` | `EXTENDED/QUERY` | `sa_relay_task_entry` | `0x1f574` | Общий relay task operation | `INFERRED` |
 | `07:A120` | `EXTENDED/QUERY` | `sa_relay_get_profile` | `0x1fcb0` | Получение relay profile | `CONFIRMED` по symbol context |
 | `07:A120` | `EXTENDED/QUERY` | `sa_relay_route_switch` | `0x1fe94` | Relay route switch | `CONFIRMED` по symbol context |
@@ -105,20 +147,50 @@ Build ID и кодовые адреса не изменились; в табли
 `sa_heartbeat_task` отправляет команду, полученную в runtime (`w21`), на
 destination `0x20:0e00`; фиксировать для неё выдуманную пару нельзя.
 
-В ELF есть именованные request handlers, но их числовая пара пока не
-восстановлена статически:
+Кроме зарегистрированного ping, в ELF есть ещё четыре именованные служебные
+функции без восстановленной числовой DUML-пары:
 
 | Handler | Контекст |
 |---|---|
-| `sa_event_ping` | Ping request |
-| `sa_event_sysreboot` | System reboot request |
-| `sa_event_amt_nvram_rw` | AMT NVRAM read/write |
-| `sa_event_common_query_device_info` | Device-info query |
-| `sa_event_rt_control_by_name` | Runtime control by name |
+| `sa_event_ping` | Возвращает входной payload; единственный handler с восстановленным raw ID `0x00000100` |
+| `sa_event_sysreboot` | Не перезагружает Android: выполняет reset modem; при втором payload byte `0x02` удерживает modem reset |
+| `sa_event_amt_nvram_rw` | Сегментированное AMT NVRAM read/write с file match и проверкой offset/length; активный вызов потенциально разрушителен |
+| `sa_event_common_query_device_info` | Формирует строку build/device info и отвечает без отдельного retcode |
+| `sa_event_rt_control_by_name` | По имени `/dev/...` включает или выключает соответствующий route-table item через `duss_mb_control_route_item` |
 
-Регистрация проходит через `duss_register_cmd`/
-`duss_event_register_dynamic_command` с таблицами, формируемыми в runtime.
-Названия handler сами по себе не дают права назначить им случайные ID.
+`sa_event_start` явно создаёт service client с `sa_event_ping` и raw ID
+`0x00000100`. Для четырёх остальных функций прямой DUML registration site не
+найден: они используются как служебные callbacks/helpers в других
+service/parameter paths.
+
+Отдельная статическая таблица по адресу `0x3abc8` содержит 16 регистраций
+встроенного parameter manager. `duss_register_cmd` читает из каждой 24-байтной
+записи `cmd_set`, `cmd_id`, request handler и общий ACK handler, затем вызывает
+`duss_event_register_dynamic_command` по `0x34e3c`:
+
+| Команда | Request handler | Назначение |
+|---|---|---|
+| `03:F3` | `reset_cfg_item_value_func` | Reset config item value |
+| `03:F7` | `get_cfg_item_info_by_hash_func` | Metadata config item по hash |
+| `03:F8` | `read_cfg_item_value_by_hash_func` | Read config item по hash |
+| `03:F9` | `write_cfg_item_value_by_hash_func` | Write config item по hash |
+| `03:FA` | `reset_cfg_item_value_by_hash_func` | Reset config item по hash |
+| `03:FB` | `recv_fixed_send_cfg_by_hash_func` | Receive fixed-send config |
+| `03:FC` | `req_fixed_send_cfg_by_hash_func` | Request fixed-send config |
+| `03:E0` | `api_user_ask_table_func` | Запрос parameter table |
+| `03:E1` | `api_user_ask_param_by_index_func` | Запрос metadata по index |
+| `03:E2` | `api_usr_get_param_by_index_func` | Read parameter по index |
+| `03:E3` | `api_usr_set_param_by_index_func` | Write parameter по index |
+| `03:E4` | `api_usr_def_param_by_index_func` | Default/reset parameter по index |
+| `01:40` | `get_cfg_item_info_by_hash_func` | Common-set alias для `03:F7` |
+| `01:41` | `read_cfg_item_value_by_hash_func` | Common-set alias для `03:F8` |
+| `01:42` | `write_cfg_item_value_by_hash_func` | Common-set alias для `03:F9` |
+| `01:43` | `reset_cfg_item_value_by_hash_func` | Common-set alias для `03:FA` |
+
+Эта таблица относится к parameter manager, а не к четырём оставшимся SDRS
+handlers. Поэтому назначать `sa_event_sysreboot`, `sa_event_amt_nvram_rw`,
+`sa_event_common_query_device_info` или `sa_event_rt_control_by_name` ID по
+соседству нельзя.
 
 ## Cross-check с live-потоком RC2
 
@@ -136,7 +208,7 @@ evidence, а не доказательство наличия handler именн
 | `07:18`, `07:30` | Country/area write family |
 | `07:19` | Country-code query family |
 | `51:04` | Cellular/device OSD telemetry; совпадает со статическим `wlm_push_dev_osd` |
-| `51:14` | Cellular/link telemetry с полной aircraft identity; совпадает с командой link-state task, но layout по одной функции ещё не назван окончательно |
+| `51:14` | Neighbour/device-link list `2 + 49 × N`; live length 51 означает одного peer, а identity region его записи содержит полный aircraft serial |
 
 Полная частотная карта live capture сохранена в
 [`DUML_STREAM_MAP.md`](DUML_STREAM_MAP.md).
