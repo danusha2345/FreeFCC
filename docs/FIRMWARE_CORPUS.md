@@ -15,14 +15,33 @@
 |---|---|---|---|
 | DJI RC/RM510 | `fpga_tang_nano_9k_card_reader-spinal/.scratch/rc_rm510_20260723/` | `dji_wlm`, `dji_link`, `dji_sdrs_agent`, `libduml_frwk.so`, `libwlm.so`, `dji.json`, debugdata | Маршрутизация DUML, `09:EC`, `51:14` и часть link/control handlers |
 | DJI RC Pro 2/RC520 | `FreeFCC/.scratch/rcpro2_4g_ota/` | Android OTA v139/v400/v440/v576, извлечённые system/vendor roots, ELF и configs | Владелец route `0xEE`, таблица `0x51`, точная семантика `51:1A`, LTE/WLM host IDs |
-| WM260 | `fpga_tang_nano_9k_card_reader-spinal/.scratch/wm260/` | `system_2.img`, `vendor_2.img`, извлечённые `dji_perception`, `dji_sec` и secure libraries | Route `10:58` приходит в `bvision:0/perception_service`; `00:E5 / 32 32 01` отвергается DJI Care dispatcher |
-| WA341 | `fpga_tang_nano_9k_card_reader-spinal/.scratch/wa341_extract/` | Извлечённый `dji_perception` | Отрицательная проверка: это не `bvision:0`, поэтому нельзя переносить его handlers на WM260 `10:58` |
+| WM260 | `fpga_tang_nano_9k_card_reader-spinal/.scratch/wm260/` | `system_2.img`, `vendor_2.img`, извлечённые `dji_perception`, `dji_sys`, `dji_sec`, route config и secure libraries | Route `10:58` приходит в `bvision:0/perception_service`; `03:AF` уходит по ICC в flight MCU; `00:E5 / 32 32 01` отвергается DJI Care dispatcher |
+| WA341 | `fpga_tang_nano_9k_card_reader-spinal/.scratch/wa341_extract/` | Извлечённые `dji_perception`, `dji_sys` | `dji_perception` не является WM260 `bvision:0`; `dji_sys` независимо подтверждает `00:00` как payload-echo device ping |
 | WA234 | локальные debugdata/заметки в соседнем firmware-проекте | `.gnu_debugdata`, symbol evidence | Используется только там, где Build ID и конкретный модуль совпадают |
+| DJI Fly 1.19.4 | `Projects_and_coding/dji_fly/FCCDJIFly_1.19.4_1085_v1.19.4.11.apk` | AppGuard APK и embedded `libdatajar.so` | Client metadata содержит `GetAreaCode` и `GetPerceptionGesture`, но защищённый DEX не даёт переносить эти имена на произвольную wire-пару |
 | DJI Fly 1.21.4 | `FreeFCC/.scratch/` и результаты разбора в `AVATA360_4G_RESEARCH.md` | APK и `libdongle_esim_core.so` | Штатный eSIM flow использует stateful `18:4B/4C`, а не sweep `51:00..7F` |
 | Live captures | `FreeFCC/.scratch/` | LAN JSON/JSONL, OpenFCC logs, bounded captures | Runtime evidence хранится отдельно от статически восстановленной семантики |
 
 Пути выше локальные и не предназначены для коммита. Проверяемые выводы,
 Build ID и hashes переносятся в `docs/`.
+
+### DJI Fly 1.19.4: граница client-side metadata
+
+Локальный APK имеет размер 1 276 882 317 и SHA-256
+`1d2814402a6e67639fa85b9ca1cb7f5ae213d35811003a996499f44ee265443d`.
+Извлечённый `libdatajar.so` имеет размер 157 494 608 и SHA-256
+`1a7abeb4cd4f51fae4c3d0de7243adbdcaa705b34aeea310af8a9841563c0527`.
+Его plaintext metadata содержит class/name entries
+`DataEyeGetPerceptionGesture`, `GetPerceptionGesture`, `GetAreaCode`,
+`CmdIdEYE`, `CmdIdFlyc` и `CmdSet`, но `_binary_dexdata0_start` начинается с
+зашифрованного blob. Поэтому это доказательство наличия client classes, а не
+доказательство конкретной пары или payload.
+
+В частности, исторический `CmdSet.EYE(10)` использует десятичное `10`
+(`0x0A`), тогда как FreeFCC `10:58` означает hex `0x10:0x58`. Совпадение
+`cmd_id=0x58` и имени `GetPerceptionGesture` отвергнуто. Для `03:AF` имя
+`GetAreaCode` остаётся только client-side family label до получения handler
+flight MCU или точного client method body.
 
 ### WM260 security/DJI Care
 
@@ -106,13 +125,17 @@ Manifest содержит обычные Android/Qualcomm partitions: `abl`, `ao
 |---|---|---|
 | Точная функция `06:72` | `NEGATIVE` | Route до RC MCU через `/dev/ttyHS2` найден, но firmware самого получателя отсутствует |
 | Точная функция `06:8C` | `NEGATIVE` | Route до `vt_air:0` найден, но firmware воздушного transmission MCU отсутствует |
+| Эффект `09:27 / 0xffff0063=3` | `NEGATIVE` | Register/value и route до `vt_air:0` известны, но firmware принимающего transmission MCU отсутствует |
+| Точная функция `03:AF` | `NEGATIVE` | Route до `flight:0` через ICC найден, но firmware flight-controller MCU отсутствует; Linux `dji_sys` только router |
 | Точная функция WM260 `10:58` | `UNKNOWN` | Получатель `bvision:0/perception_service` доказан, но registration/handler в имеющемся `dji_perception` пока не локализован |
 | Avata 360 aircraft-side eSIM handler | `ABSENT` | Отдельного Avata 360 eMMC/firmware dump в локальном корпусе нет |
 
 `NEGATIVE` здесь означает не «команды нет», а «после проверки точного
 получателя нужного исполняемого firmware в имеющемся корпусе нет». Закрыть
-`06:72` и `06:8C` дальнейшим анализом Android OTA невозможно без другого уже
-имеющегося или нового firmware микроконтроллера.
+`03:AF`, `06:72`, `06:8C` и эффект `0xffff0063` дальнейшим анализом Android
+OTA невозможно без другого уже имеющегося или нового firmware
+микроконтроллера. `10:58` отличается: его receiver ELF есть, поэтому это
+оставшаяся задача статического анализа, а не пробел корпуса.
 
 ## Правила воспроизводимости
 

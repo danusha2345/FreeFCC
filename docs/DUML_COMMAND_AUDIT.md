@@ -54,9 +54,9 @@ RF-региона, GPS, LED или 4G-состояния.
 | 1, 21 | `10:58` | `030100` | Получатель `dst=0x12` — `bvision:0` / `perception_service`. Одинаковый кадр стоит в начале и конце, поэтому старые противоположные подписи «вход/выход service mode» не подтверждаются. Точный handler не восстановлен | route `CONFIRMED`; semantics `UNKNOWN` |
 | 2 | `06:72` | `00000000000100` | Получатель `dst=0x06` — `rc:0`; RM510 пересылает кадр по UART `/dev/ttyHS2` во внешний RC MCU. Точный handler и значение не декодированы | route `CONFIRMED`; semantics `UNKNOWN` |
 | 3 | `03:F9` | `8a237103f401` | Hash `0x0371238a`, значение LE `0x01f4` = 500: запись `max_height`; это побочный flight-limit write, а не FCC primitive | `CONFIRMED` |
-| 4 | `00:00` | `000001` | Общий запрос к `dst=0x1f`; точная функция не установлена | `UNKNOWN` |
+| 4 | `00:00` | `000001` | Стандартный device ping к `dst=0x1f` (`all:0`, broadcast). В восстановленных DJI handlers ping отвечает копией request payload; `00 00 01` — трёхбайтный echo token, а не activation/FCC-write | family/route `CONFIRMED`; WM260 live ACK не снимался |
 | 5 | `00:32` | `3131000000` | В WM260 `dst=0x6F` — `dji_sec/sec_service` (`s_to_p_air:3`). Aircraft handler принимает `0x31` и возвращает 59-байтное состояние активации; четыре последующих request bytes в этой ветке не используются. Это query, не FCC-write | `CONFIRMED` для WM260 |
-| 6 | `03:AF` | `032400000000000000` | Публичное имя семейства — `GetAreaCode`; значение этого payload не декодировано | `INFERRED` |
+| 6 | `03:AF` | `032400000000000000` | Публичное имя семейства — `GetAreaCode`. `dst=0x03` — `flight:0`; WM260 `dji.json` пересылает кадр по ICC в flight-controller MCU. Linux `dji_sys` является router, а не receiver; firmware MCU в корпусе нет | route `CONFIRMED`; family `INFERRED`; semantics `UNKNOWN` |
 | 7, 8 | `07:30` | `41550000415500000100` | RM510 handler читает только первые два байта `AU`, пишет vendor country slot `6` и `country.bin`; хвост игнорирует. Два кадра полностью одинаковы, поэтому band-specific смысл не подтверждён | `CONFIRMED` для локального handler contract |
 | 9 | `09:27` | `00024800ffff0200000000` | SDR assistant write: address `0xffff0048`, value `2`; публичный DJI-код называет эту операцию `setForceFcc` | `CONFIRMED` |
 | 10 | `09:27` | `00026300ffff0300000000` | SDR assistant write: address `0xffff0063`, value `3`; это register write, но точный эффект value `3` не установлен | `CONFIRMED` для register/value, эффект `UNKNOWN` |
@@ -71,11 +71,12 @@ RF-региона, GPS, LED или 4G-состояния.
 
 Главный непосредственно распознанный FCC-write здесь — первый `09:27`
 `setForceFcc`. Country-команды также реально меняют country/area state.
+`00:00 / 00 00 01` оказался обычным broadcast ping и не меняет настройки.
 `00:E5 / 32 32 01` на WM260 отвергается без действия. Два
 `sdr_lost_prevent_*` оказались штатными flight-safety flags, а
 `c1_regulatory_restriction` относится к perception/FocusTrack. Семантика
-`10:58`, `06:72` и `06:8C` всё ещё не доказана. Полный RF-эффект составного
-профиля необходимо проверять графиком Transmission или независимым
+`10:58`, `03:AF`, `06:72` и `06:8C` всё ещё не доказана. Полный RF-эффект
+составного профиля необходимо проверять графиком Transmission или независимым
 RF/readback evidence.
 
 ### Как восстановлены маршруты и PM-хэши
@@ -86,6 +87,8 @@ DUML destination byte кодируется как
 
 | Кадры | Destination | Получатель | Где находится handler |
 |---|---:|---|---|
+| `00:00` | `0x1f` | `all:0` | Специальная broadcast-цель; стандартный ping handler есть у принимающих DJI system services |
+| `03:AF` | `0x03` | `flight:0` | Flight-controller MCU за WM260 ICC `/dev/icc_dev`, channel `ap0-mcu0-1.0` / `mcu0-ap0-1.0` |
 | `06:72` | `0x06` | `rc:0` | Внешний RC MCU за `/dev/ttyHS2`, protocol `v1`; не Android `dji_link` |
 | `06:8C` | `0x09` | `vt_air:0` | Air-side transmission MCU; не `dji_wlm` (`vt_air:7`) и не `dji_sdrs_agent` (`vt_air:4`) |
 | `10:58` | `0x12` | `bvision:0` | WM260 `dji_perception` / `perception_service` |
@@ -125,6 +128,31 @@ hash(name) = fold(name + "_0", h = ((h << 8) | byte) mod 0xfffffffb)
 `dji_sys`/`dji_perception`. Это согласуется с маршрутом в `vt_air:0`: handler
 находится в отсутствующей firmware transmission MCU. Историческую подпись
 «5.8 GHz power limit» текущий локальный корпус не подтверждает.
+
+### Закрытые и оставшиеся opaque-команды
+
+| Команда | Текущая граница доказательства | Что нужно для полного закрытия |
+|---|---|---|
+| `00:00 / 000001` | `CLOSED`: broadcast device ping; payload используется как echo token | Ничего для классификации; live ACK нужен только для проверки конкретной модели |
+| `03:AF / 0324…` | Route до `flight:0` доказан; `GetAreaCode` остаётся client-side family name | Firmware flight-controller MCU с handler table либо контролируемый request/ACK |
+| `09:27 / ffff0063=3` | Register/value и route до `vt_air:0` доказаны | Firmware air transmission MCU |
+| `06:72` | Route до RC MCU доказан | Firmware RC MCU |
+| `06:8C` | Route до air transmission MCU доказан | Firmware air transmission MCU |
+| `10:58 / 030100` | Receiver `bvision:0/perception_service` присутствует локально, но registration не локализована | Более глубокий разбор WM260 `dji_perception` либо соответствующий request/ACK |
+
+Для `00:00` использован WA341 `dji_sys` (Build ID
+`ed5cc566fae4ef008a19727014ca2c00`, SHA-256
+`beb09425c85e5725aef7a29971dfc18b2d7e93102f3ad2a706dce1be5c958234`):
+slot `cmd_set=0/cmd_id=0` указывает на `sys_event_dev_ping` (`0xbe650`), а
+ветка ответа по `0xbe6e8–0xbe724` передаёт в `duss_event_resp_data_v2/v3`
+request data и request length. Это cross-generation handler evidence, а не
+заявление о снятом ACK именно на WM260.
+
+Для `03:AF` route evidence — WM260 `dji.json`, SHA-256
+`849f60e02f4eb07c3cd1a1ecece4eb167deca82ab217bc48fb28dac9930b4789`:
+`flight:0` имеет raw host `0x30` и физический ICC-route через
+`ap0-mcu0-1.0` / `mcu0-ap0-1.0`. DUML raw destination `0x03` декодируется в
+тот же `flight:0`; имеющийся Linux `dji_sys` только пересылает пакет.
 
 ## Пятисекундный periodic-профиль
 

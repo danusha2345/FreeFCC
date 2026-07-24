@@ -60,15 +60,18 @@ Build ID и кодовые адреса не изменились; в табли
 |---|---:|---|---|
 | WM260 `dji.json` | 267744 | — | `849f60e02f4eb07c3cd1a1ecece4eb167deca82ab217bc48fb28dac9930b4789` |
 | WM260 `dji_perception` | 20462408 | `136fcec833fc5af8eac717e1785c38e4` | `76a08fcf22db6c9a66c9a01192bbc0984d078a5329d8d8d7f946c45fe0e90822` |
+| WA341 `dji_sys` | 1742280 | `ed5cc566fae4ef008a19727014ca2c00` | `beb09425c85e5725aef7a29971dfc18b2d7e93102f3ad2a706dce1be5c958234` |
 
-## Маршрутизация `06:72`, `06:8C` и `10:58`
+## Маршрутизация opaque-команд полного FCC-профиля
 
 DUML destination byte кодируется как
-`(index << 5) | (module_type & 0x1f)`. Поэтому назначения трёх ранее opaque
+`(index << 5) | (module_type & 0x1f)`. Поэтому назначения ранее opaque
 групп FreeFCC можно определить независимо от их payload:
 
 | Команда | Raw destination | Symbolic host | Подтверждённый маршрут |
 |---|---:|---|---|
+| `00:00` | `0x1f` | `all:0` | Специальный broadcast destination; стандартный device ping |
+| `03:AF` | `0x03` | `flight:0` | WM260 `dji_sys` → ICC `/dev/icc_dev`, send `ap0-mcu0-1.0`, receive `mcu0-ap0-1.0`, protocol `v1` |
 | `06:72` | `0x06` | `rc:0` | RM510 `dji_link` → UART `/dev/ttyHS2`, 115200, protocol `v1` |
 | `06:8C` | `0x09` | `vt_air:0` | Air-side transmission MCU; при hybrid route RM510 передаёт через `vt_gnd:7` |
 | `10:58` | `0x12` | `bvision:0` | На WM260 локальный `perception_service`, процесс `dji_perception` |
@@ -80,10 +83,20 @@ cmdsets `00`, `07` и `18`, но не для `06`. Следовательно, `
 `dji_sdrs_agent` (`vt_air:4`) или `dji_wlm` (`vt_air:7`): `06:8C`
 обслуживается transmission MCU на борту.
 
-Поэтому точные функции `06:72` и `06:8C` пока остаются `UNKNOWN`. Для
-подтверждения гипотезы про RC stick lock нужен firmware RC MCU или
+Поэтому точные функции `03:AF`, `06:72` и `06:8C` пока остаются `UNKNOWN`.
+`03:AF` принимает не Linux `dji_sys`, а отдельный flight-controller MCU:
+`dji_sys` только маршрутизирует raw destination `0x03` в host `flight:0`
+(`0x30`) по ICC. Firmware этого MCU в сохранённом WM260 Android/eMMC-корпусе
+нет. Для подтверждения гипотезы про RC stick lock нужен firmware RC MCU или
 контролируемый live capture request/ACK; одно имя из upstream issue
 недостаточно.
+
+`00:00` при этом закрывается отдельно. В WA341 `dji_sys` slot
+`cmd_set=0/cmd_id=0` указывает на `sys_event_dev_ping` (`0xbe650`) и
+`sys_event_dev_ping_ack` (`0xbe750`). Request handler в ветке
+`0xbe6e8–0xbe724` отвечает исходными request data/length через
+`duss_event_resp_data_v2/v3`. Поэтому `00 00 01` в профиле — echo token
+broadcast ping, а не изменение региона, activation или FCC primitive.
 
 Для `10:58` подтверждён только конечный userspace-получатель:
 `bvision:0/perception_service` в `dji_perception`. Прямого вызова
@@ -96,6 +109,14 @@ cmdsets `00`, `07` и `18`, но не для `06`. Следовательно, `
 `GetPerceptionGesture` недостаточно и было отброшено. Одинаковый `10:58` в
 начале и конце профиля также не доказывает старые противоположные действия
 «enter/exit service mode».
+
+Локальный DJI Fly 1.19.4 добавляет только отрицательное client-side evidence:
+в `libdatajar.so` (SHA-256
+`1a7abeb4cd4f51fae4c3d0de7243adbdcaa705b34aeea310af8a9841563c0527`)
+есть metadata strings `DataEyeGetPerceptionGesture`,
+`GetPerceptionGesture`, `CmdIdEYE` и `CmdSet`, но embedded DEX защищён.
+Наличие класса не устраняет несовпадение `0x0A` против `0x10` и не раскрывает
+WM260 receiver handler.
 
 ## `dji_wlm`
 
