@@ -128,40 +128,38 @@ class FccKeepaliveServicePolicyTest {
 
     @Test
     fun repeatedIdenticalCountryTicksShareOneLogState() {
-        val verified = FccCountryRegionResult(
-            writeCompleted = true,
-            writeAckMatched = true,
-            readCompleted = true,
-            readAckMatched = true,
-            observedCountry = "AU"
-        )
         assertEquals(
-            FccKeepaliveService.periodicCountryState(verified),
-            FccKeepaliveService.periodicCountryState(verified.copy())
+            FccKeepaliveService.periodicCountryState(alreadyOnTarget),
+            FccKeepaliveService.periodicCountryState(alreadyOnTarget.copy())
         )
     }
 
     @Test
-    fun aChangedCountryReadbackProducesANewLogState() {
-        val verified = FccCountryRegionResult(
-            writeCompleted = true,
-            writeAckMatched = true,
-            readCompleted = true,
-            readAckMatched = true,
-            observedCountry = "AU"
+    fun aTickThatHadToRewriteTheCountryProducesANewLogState() {
+        assertNotEquals(
+            FccKeepaliveService.periodicCountryState(alreadyOnTarget),
+            FccKeepaliveService.periodicCountryState(
+                alreadyOnTarget.copy(initialCountry = "RU", writeAttempts = 1)
+            )
         )
         assertNotEquals(
-            FccKeepaliveService.periodicCountryState(verified),
-            FccKeepaliveService.periodicCountryState(verified.copy(observedCountry = "RU"))
+            FccKeepaliveService.periodicCountryState(alreadyOnTarget),
+            FccKeepaliveService.periodicCountryState(alreadyOnTarget.copy(observedCountry = null))
         )
         assertNotEquals(
-            FccKeepaliveService.periodicCountryState(verified),
-            FccKeepaliveService.periodicCountryState(verified.copy(observedCountry = null))
-        )
-        assertNotEquals(
-            FccKeepaliveService.periodicCountryState(verified),
-            FccKeepaliveService.periodicCountryState(verified.copy(writeAckMatched = false))
+            FccKeepaliveService.periodicCountryState(alreadyOnTarget),
+            FccKeepaliveService.periodicCountryState(alreadyOnTarget.copy(readAckMatched = false))
         )
     }
+
+    private val alreadyOnTarget = FccCountryRegionResult(
+        initialCountry = "AU",
+        writeAttempts = 0,
+        writeCompleted = false,
+        writeAckMatched = false,
+        readCompleted = true,
+        readAckMatched = true,
+        observedCountry = "AU"
+    )
 
 }

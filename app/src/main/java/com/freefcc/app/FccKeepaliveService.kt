@@ -64,8 +64,8 @@ internal object HomePointSignalPolicy {
  * Foreground Auto FCC service. Home Point mode keeps waiting for original DJI
  * Fly accessibility text and applies the complete profile after every new
  * flight-session Home Point event. Periodic mode applies the complete profile
- * once and then repeats the country write plus the original four-frame
- * keepalive every five seconds.
+ * once and then checks the reported country every five seconds, re-applying the
+ * profile only when the controller no longer reports the target country.
  * Both modes remain active until the user turns their switch off.
  */
 class FccKeepaliveService : Service() {
@@ -212,10 +212,10 @@ class FccKeepaliveService : Service() {
         internal fun deliveredAutoMode(action: String?, encodedMode: String?): AutoFccMode? =
             AutoFccMode.fromWireValue(encodedMode).takeIf { action == ACTION_START }
 
-        /** Log key for a periodic country write; identical ticks are not logged twice. */
+        /** Log key for a periodic country check; identical ticks are not logged twice. */
         internal fun periodicCountryState(result: FccCountryRegionResult): String =
-            "${result.writeAckMatched}:${result.readAckMatched}:" +
-                "${result.observedCountry ?: "unknown"}:${result.verified}"
+            "${result.initialCountry ?: "unknown"}:${result.writeAttempts}:" +
+                "${result.readAckMatched}:${result.observedCountry ?: "unknown"}:${result.verified}"
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -373,7 +373,7 @@ class FccKeepaliveService : Service() {
                     FccViewModel.logServiceEvent(
                         "DJI FLY TEXT FCC: Home Point detected; applying full profile"
                     )
-                    applyCountryRegionOnce(generation, pinnedPort)?.let { result ->
+                    ensureCountryRegion(generation, pinnedPort)?.let { result ->
                         logCountryRegionResult("DJI FLY TEXT FCC", result)
                     }
                     val report = applyWithPreWriteRetry(
@@ -397,10 +397,10 @@ class FccKeepaliveService : Service() {
             }
 
             FccViewModel.logServiceEvent(
-                "PERIODIC FCC: starting full profile, then country write and legacy keepalive every 5s"
+                "PERIODIC FCC: starting full profile, then a country check every 5s"
             )
             val pinnedPort = awaitControllerPort(generation) ?: return@launch
-            applyCountryRegionOnce(generation, pinnedPort)?.let { result ->
+            ensureCountryRegion(generation, pinnedPort)?.let { result ->
                 logCountryRegionResult("PERIODIC FCC bootstrap", result)
             }
             val bootstrapReport = applyWithPreWriteRetry(
@@ -415,31 +415,25 @@ class FccKeepaliveService : Service() {
                 return@launch
             }
 
-            val keepaliveProfile = try {
-                Profiles.load(this@FccKeepaliveService, "fcc_keepalive.json")
-            } catch (e: Exception) {
-                finishAutoRun(generation, false, "Legacy FCC keepalive unavailable: ${e.message}")
-                return@launch
-            }
             var lastTickCountryState: String? = null
             while (requestGate.isCurrent(generation)) {
                 delay(PERIODIC_INTERVAL_MS)
                 if (!requestGate.isCurrent(generation)) return@launch
-                applyCountryRegionOnce(generation, pinnedPort)?.let { result ->
-                    // Every tick re-writes the country, but the log only records
-                    // transitions so a running mode does not flood the log tab.
-                    val state = periodicCountryState(result)
-                    if (state != lastTickCountryState) {
-                        lastTickCountryState = state
-                        logCountryRegionResult("PERIODIC FCC tick", result)
-                    }
+                val country = ensureCountryRegion(generation, pinnedPort) ?: return@launch
+                // A tick that already reads the target country costs one query
+                // and sends nothing; the log records only state transitions.
+                val state = periodicCountryState(country)
+                if (state != lastTickCountryState) {
+                    lastTickCountryState = state
+                    logCountryRegionResult("PERIODIC FCC tick", country)
                 }
+                if (country.skippedWrite) continue
                 if (!requestGate.isCurrent(generation)) return@launch
                 val report = applyProfileOnce(
-                    profile = keepaliveProfile,
+                    profile = bootstrapProfile,
                     generation = generation,
                     pinnedPort = pinnedPort,
-                    label = "PERIODIC FCC tick",
+                    label = "PERIODIC FCC re-apply",
                     homePointObservedAtMs = null
                 )
                 if (report.result == BootstrapApplyResult.CANCELLED) return@launch
@@ -488,7 +482,7 @@ class FccKeepaliveService : Service() {
         return null
     }
 
-    private suspend fun applyCountryRegionOnce(
+    private suspend fun ensureCountryRegion(
         generation: Long,
         pinnedPort: Int
     ): FccCountryRegionResult? {
@@ -513,7 +507,9 @@ class FccKeepaliveService : Service() {
             return null
         }
         return try {
-            FccCountryRegion.apply(transport, pinnedPort)
+            FccCountryRegion.ensure(transport, pinnedPort) {
+                requestGate.isCurrent(generation)
+            }
         } finally {
             sessionLease.close()
             hardwareLease.close()
@@ -522,9 +518,9 @@ class FccKeepaliveService : Service() {
 
     private fun logCountryRegionResult(label: String, result: FccCountryRegionResult) {
         FccViewModel.logServiceEvent(
-            "$label country: write=${result.writeCompleted}, " +
-                "write_ack=${result.writeAckMatched}, read=${result.readCompleted}, " +
-                "read_ack=${result.readAckMatched}, " +
+            "$label country: initial=${result.initialCountry ?: "unknown"}, " +
+                "writes=${result.writeAttempts}, write_ack=${result.writeAckMatched}, " +
+                "read=${result.readCompleted}, read_ack=${result.readAckMatched}, " +
                 "observed=${result.observedCountry ?: "unknown"}, verified=${result.verified}"
         )
     }

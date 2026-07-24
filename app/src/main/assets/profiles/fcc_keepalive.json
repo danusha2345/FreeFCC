@@ -1,6 +1,6 @@
 {
   "name": "Legacy FCC Keepalive",
-  "description": "Original upstream four-frame periodic sequence. Used only by explicit five-second Auto FCC mode after one complete profile apply; the exact necessity and semantics of these four requests are unverified.",
+  "description": "Original upstream four-frame periodic sequence, retained as a reverse-engineering reference only. Since 1.5.48 the runtime no longer sends it: the five-second Auto FCC mode reads the country and re-applies fcc.json only when it no longer matches the target. The exact necessity and semantics of these four requests are unverified.",
   "sender": 130,
   "sender_desc": "MOBILE_APP, index 4",
   "cmd_type": 32,

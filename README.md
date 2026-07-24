@@ -35,7 +35,7 @@ A free and open-source Android app that unlocks FCC mode, sends experimental 4G 
 | **GPS Control** | Reads the master `gps_enable` state and provides experimental explicit ON/OFF commands with one-shot readback |
 | **LED Control** | Reads the current lamp state and verifies it after LED on/off commands (DJI Fly and a linked aircraft are required) |
 | **Device Info** | Shows app version, controller code, aircraft model code, factory S/N, and LAN bridge address |
-| **Auto FCC** | Saves one of two optional startup modes: repeated DJI Fly Home Point detection or the country write plus the original four-frame keepalive every five seconds |
+| **Auto FCC** | Saves one of two optional startup modes: repeated DJI Fly Home Point detection, or a five-second country check that re-applies the profile only when the region no longer matches |
 | **Persistent Status** | Shows a foreground notification and starts the app service automatically after controller boot without sending FCC commands |
 | **Auto-Updater** | Checks `danusha2345/SkylabFCCfree` GitHub Releases and lets you download/install from the app |
 | **LAN Diagnostic API** | Logs, live status, bounded OpenFCC/DJI `logcat`, one-shot localhost socket inventory, allowlisted app actions, and raw DUML request/response over HTTP on the controller's RFC1918 Wi-Fi address |
@@ -102,15 +102,16 @@ debounced for 30 seconds. Enable **SkylabFCCfree Home Point Test** once in
 Android Accessibility settings. The first attempt opens the required settings;
 after the service is enabled and you return to SkylabFCCfree, the mode starts.
 
-**Auto FCC — every 5 sec** is the explicit legacy alternative. It sends the
-complete profile once, then repeats the `07:30` country write with its
-read-only `07:19` readback followed by the original upstream four-frame
-`fcc_keepalive.json` every five seconds until its switch is turned off.
+**Auto FCC — every 5 sec** is the explicit polling alternative. It sends the
+complete profile once, then every five seconds runs a single read-only `07:19`
+country query. While the controller keeps reporting the target country, the
+tick sends nothing else. As soon as the reported country differs, the app
+writes `07:30` (retried up to three times until the readback confirms it) and
+re-applies the complete `fcc.json`.
 On a resource-constrained controller, prefer **Home Point**: while armed it is
 event-driven and does not perform periodic DUML/TCP work. The five-second mode
-wakes the service and makes six short frame exchanges per tick—72 per
-minute, or 4,320 per hour—so its CPU, I/O, and battery cost is small but
-continuous. The persistent status notification itself does not poll.
+wakes the service for one short query per tick—12 per minute, or 720 per
+hour—so its CPU, I/O, and battery cost is small but continuous. The persistent status notification itself does not poll.
 **Send FCC Request** remains a one-shot manual full-profile action. Neither
 automatic mode nor the manual action opens DJI Fly; only **Open DJI Fly** does.
 

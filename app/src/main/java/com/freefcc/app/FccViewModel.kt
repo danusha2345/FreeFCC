@@ -627,10 +627,11 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
 
         runOnIO {
             try {
-                val countryResult = FccCountryRegion.apply(transport, effectivePort)
+                val countryResult = FccCountryRegion.ensure(transport, effectivePort)
                 val observedCountry = countryResult.observedCountry ?: "unknown"
                 log(
-                    "FCC country: write=${countryResult.writeCompleted}, " +
+                    "FCC country: initial=${countryResult.initialCountry ?: "unknown"}, " +
+                        "writes=${countryResult.writeAttempts}, " +
                         "write_ack=${countryResult.writeAckMatched}, " +
                         "read=${countryResult.readCompleted}, " +
                         "read_ack=${countryResult.readAckMatched}, " +
