@@ -367,6 +367,9 @@ class FccKeepaliveService : Service() {
                     FccViewModel.logServiceEvent(
                         "DJI FLY TEXT FCC: Home Point detected; applying full profile"
                     )
+                    applyCountryRegionOnce(generation, pinnedPort)?.let { result ->
+                        logCountryRegionResult("DJI FLY TEXT FCC", result)
+                    }
                     val report = applyWithPreWriteRetry(
                         profile = bootstrapProfile,
                         generation = generation,
@@ -391,6 +394,9 @@ class FccKeepaliveService : Service() {
                 "PERIODIC FCC: starting full profile, then legacy keepalive every 5s"
             )
             val pinnedPort = awaitControllerPort(generation) ?: return@launch
+            applyCountryRegionOnce(generation, pinnedPort)?.let { result ->
+                logCountryRegionResult("PERIODIC FCC bootstrap", result)
+            }
             val bootstrapReport = applyWithPreWriteRetry(
                 profile = bootstrapProfile,
                 generation = generation,
@@ -463,6 +469,47 @@ class FccKeepaliveService : Service() {
             delay(APPLY_CONNECT_RETRY_DELAY_MS)
         }
         return null
+    }
+
+    private suspend fun applyCountryRegionOnce(
+        generation: Long,
+        pinnedPort: Int
+    ): FccCountryRegionResult? {
+        var hardwareLease: HardwareLock.Lease? = null
+        var sessionLease: DumlPortSessionLock.Lease? = null
+        while (requestGate.isCurrent(generation) && sessionLease == null) {
+            hardwareLease = HardwareLock.tryBegin()
+            if (hardwareLease == null) {
+                delay(200)
+                continue
+            }
+            sessionLease = DumlPortSessionLock.tryBegin(pinnedPort)
+            if (sessionLease == null) {
+                hardwareLease.close()
+                hardwareLease = null
+                delay(200)
+            }
+        }
+        if (!requestGate.isCurrent(generation) || hardwareLease == null || sessionLease == null) {
+            sessionLease?.close()
+            hardwareLease?.close()
+            return null
+        }
+        return try {
+            FccCountryRegion.apply(transport, pinnedPort)
+        } finally {
+            sessionLease.close()
+            hardwareLease.close()
+        }
+    }
+
+    private fun logCountryRegionResult(label: String, result: FccCountryRegionResult) {
+        FccViewModel.logServiceEvent(
+            "$label country: write=${result.writeCompleted}, " +
+                "write_ack=${result.writeAckMatched}, read=${result.readCompleted}, " +
+                "read_ack=${result.readAckMatched}, " +
+                "observed=${result.observedCountry ?: "unknown"}, verified=${result.verified}"
+        )
     }
 
     private suspend fun applyWithPreWriteRetry(

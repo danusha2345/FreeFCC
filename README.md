@@ -94,7 +94,8 @@ restored when the app starts after controller boot or an APK update.
 **Auto FCC — Home Point** waits for localized Home Point text from the original
 DJI Fly through Android Accessibility. It does not open a DUML socket while
 waiting. After an exact phrase match it connects to the controller if needed and
-sends the complete 21-frame × 2-round FCC profile. It then re-arms instead of
+sets country `AU` once, verifies it with `07:19`, and sends the
+17-frame × 2-round FCC core profile. It then re-arms instead of
 stopping, so a later Home Point after an aircraft battery replacement triggers
 another full apply while the controller remains on. Duplicate UI events are
 debounced for 30 seconds. Enable **SkylabFCCfree Home Point Test** once in
@@ -235,7 +236,23 @@ GPS uses the model-independent hash `0xC5429582` for `g_config.gps_cfg.gps_enabl
 
 ### FCC Profile
 
-The legacy composite contains 21 frames sent in 2 rounds with 30ms between frames and 100ms between rounds. It produced an FCC result on tested Mini 5 Pro, Mini 4 Pro, Mavic 4 Pro, Air 3S, Neo, and Avata 360 hardware, but the necessity and universality of every individual frame are not proven. The directly identified FCC primitive is the first `09:27` SDR register write (`setForceFcc`); country/area writes, opaque requests, and an unrelated `max_height=500` side-effect are also present. All requested writes must complete before the UI reports that the sequence was sent, but the proxy cannot confirm the resulting RF region. Verify the Transmission graph in DJI Fly. Pressing Back moves SkylabFCCfree to the background instead of destroying its Activity; Android process death still requires a new **Auto FCC** Connect. See the [DUML command audit](docs/DUML_COMMAND_AUDIT.md) for the evidence level of every frame and the [RM510 command reference](docs/RM510_DUML_COMMAND_REFERENCE.md) for commands recovered from controller binaries.
+The original upstream composite contained 21 frames sent in 2 rounds. Country
+handling is now bounded and verifiable: every FCC apply sends one
+`07:30=AU`, reads the result once with `07:19`, then sends the remaining
+17-frame core in 2 rounds with 30ms between frames and 100ms between rounds.
+The original composite produced an FCC result on tested Mini 5 Pro, Mini 4 Pro,
+Mavic 4 Pro, Air 3S, Neo, and Avata 360 hardware, but the necessity and
+universality of every individual core frame are not proven. The directly
+identified FCC primitive is the first `09:27` SDR register write
+(`setForceFcc`); opaque requests and an unrelated `max_height=500` side-effect
+remain in the core pending separate reduction tests. Country readback confirms
+the controller country state, not physical RF power, so verify the Transmission
+graph in DJI Fly. Pressing Back moves SkylabFCCfree to the background instead
+of destroying its Activity; Android process death still requires a new
+**Auto FCC** Connect. See the [DUML command audit](docs/DUML_COMMAND_AUDIT.md)
+for the evidence level of every frame and the
+[RM510 command reference](docs/RM510_DUML_COMMAND_REFERENCE.md) for commands
+recovered from controller binaries.
 
 The CE/default-region action is experimental. It sends one opaque `06:72` request to destination `0x20`, stops keepalive first, and reports only write completion. Its interpretation as CE or factory-region restore is unverified and must be checked in DJI Fly.
 
@@ -323,7 +340,7 @@ Profiles combine historical/upstream captures with commands verified during curr
 ```
 app/src/main/
   assets/profiles/
-    fcc.json          legacy 21-frame FCC composite
+    fcc.json          legacy 17-frame FCC core (country write/readback is code-driven)
     fcc_keepalive.json original opaque 4-frame sequence used by five-second Auto FCC
     ce_restore.json    1 opaque experimental 06:72 request
     4g.json           experimental 128-frame 0x51 serial sweep

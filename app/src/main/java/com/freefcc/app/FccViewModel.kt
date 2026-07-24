@@ -602,8 +602,8 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
     // --- FCC ---
 
     /**
-     * Sends the 21-frame FCC unlock profile using the timing from fcc.json.
-     * The profile already runs 2 rounds internally for reliability.
+     * Verifies one AU country write, then sends the 17-frame FCC core profile.
+     * The core profile runs 2 rounds internally for reliability.
      */
     fun enableFcc(): Boolean {
         val hardwareLease = beginHardwareOp()
@@ -627,6 +627,15 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
 
         runOnIO {
             try {
+                val countryResult = FccCountryRegion.apply(transport, effectivePort)
+                val observedCountry = countryResult.observedCountry ?: "unknown"
+                log(
+                    "FCC country: write=${countryResult.writeCompleted}, " +
+                        "write_ack=${countryResult.writeAckMatched}, " +
+                        "read=${countryResult.readCompleted}, " +
+                        "read_ack=${countryResult.readAckMatched}, " +
+                        "observed=$observedCountry, verified=${countryResult.verified}"
+                )
                 val profile = Profiles.load(app, "fcc.json")
                 val expectedWrites = profile.frames.size * profile.rounds
                 val attempt = FccRuntime.tracker.beginApply(
@@ -660,7 +669,11 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
                     update {
                         copy(
                             status = "fcc_written",
-                            message = "FCC request written — RF mode unknown; verify in DJI Fly",
+                            message = if (countryResult.verified) {
+                                "Region AU verified; FCC request written — verify RF mode in DJI Fly"
+                            } else {
+                                "Region AU not confirmed ($observedCountry); FCC request written — verify in DJI Fly"
+                            },
                             isFccEnabled = true,
                             isBusy = false,
                             busyProgress = 1f,

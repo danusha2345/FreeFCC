@@ -123,7 +123,7 @@ cache-механизмом.
 | Где работает | На DJI-пульте | На отдельном Android-устройстве |
 | Подключение к дрону | Через штатный канал пульта и локальные DJI proxy ports | Прямой USB host/accessory |
 | Источник команды | Локальные JSON-профили в APK | Ответ закрытого Drone-Hacks API |
-| FCC-операция | 21 кадр × 2 раунда; распознанный primitive — `09:27` write `0xffff0048 = 2` | Один server-provided `cmdSet`/`cmdId`/`payload`, отправленный как `SendCustomPacket` |
+| FCC-операция | Одна `07:30=AU`, один `07:19` readback, затем 17 кадров × 2 раунда; распознанный primitive — `09:27` write `0xffff0048 = 2` | Один server-provided `cmdSet`/`cmdId`/`payload`, отправленный как `SendCustomPacket` |
 | Поддержание режима | Опциональный 4-кадровый keepalive каждые 5 секунд либо Home Point trigger | Постоянный keepalive в APK не доказан; обнаружен One-Shot flow |
 | Аккаунт/подписка | Не нужны | Проверяются entitlement, subscription и device binding |
 | Offline | Полностью локальная логика | Кэш ранее авторизованного payload с expiration |

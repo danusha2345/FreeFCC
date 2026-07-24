@@ -74,6 +74,10 @@ provide a physical RF-region readback. `fcc_sequence_written` and
 app process. The `fcc_last_attempt_*` fields report origin, exact port,
 timestamps, expected/flushed writes and matching ACK count; the
 `fcc_auto_*` fields retain the last automatic attempt even after a manual retry.
+Before the repeated FCC core, every `fcc_enable` path sends exactly one
+`07:30=AU` and one read-only `07:19`. The process log records the observed
+two-letter country and whether it equals `AU`; this verifies controller country
+state, not physical RF power.
 The historical `home_point_monitor_*` and `keepalive_*` fields are compatibility
 aliases for the active foreground Auto FCC lifecycle; they no longer imply a
 DUML Home Point listener.

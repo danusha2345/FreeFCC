@@ -320,7 +320,7 @@ class DumlTransport {
      * matching the DJI proxy contract) with aggressive ACK handling: the ACK
      * read uses the shortest timeout that still reliably drains the proxy
      * response, and the post-ACK settle delay is minimal. This gives a fast
-     * apply (e.g. a 21-frame, 2-round FCC unlock completes in ~6s on a healthy
+     * apply (e.g. a multi-frame, 2-round FCC unlock completes in ~6s on a healthy
      * RC link, vs ~12s with the old generous timeouts).
      *
      * @param onProgress Called with a 0..1 float as frames are sent
