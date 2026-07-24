@@ -215,7 +215,9 @@ class FccKeepaliveService : Service() {
         /** Log key for a periodic country check; identical ticks are not logged twice. */
         internal fun periodicCountryState(result: FccCountryRegionResult): String =
             "${result.initialCountry ?: "unknown"}:${result.writeAttempts}:" +
-                "${result.readAckMatched}:${result.observedCountry ?: "unknown"}:${result.verified}"
+                "${result.writeCompleted}:${result.writeAckMatched}:" +
+                "${result.readCompleted}:${result.readAckMatched}:" +
+                "${result.observedCountry ?: "unknown"}:${result.verified}"
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)

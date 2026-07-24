@@ -152,6 +152,29 @@ class FccKeepaliveServicePolicyTest {
         )
     }
 
+    @Test
+    fun transportOutcomeChangesProduceANewLogState() {
+        val baseline = FccKeepaliveService.periodicCountryState(alreadyOnTarget)
+        assertNotEquals(
+            baseline,
+            FccKeepaliveService.periodicCountryState(
+                alreadyOnTarget.copy(writeCompleted = true)
+            )
+        )
+        assertNotEquals(
+            baseline,
+            FccKeepaliveService.periodicCountryState(
+                alreadyOnTarget.copy(writeAckMatched = true)
+            )
+        )
+        assertNotEquals(
+            baseline,
+            FccKeepaliveService.periodicCountryState(
+                alreadyOnTarget.copy(readCompleted = false)
+            )
+        )
+    }
+
     private val alreadyOnTarget = FccCountryRegionResult(
         initialCountry = "AU",
         writeAttempts = 0,

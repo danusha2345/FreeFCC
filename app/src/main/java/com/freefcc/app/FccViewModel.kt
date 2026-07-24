@@ -602,7 +602,8 @@ class FccViewModel(private val app: Application) : AndroidViewModel(app) {
     // --- FCC ---
 
     /**
-     * Verifies one AU country write, then sends the 17-frame FCC core profile.
+     * Reads the country, writes and verifies AU only when needed, then sends
+     * the 17-frame FCC core profile.
      * The core profile runs 2 rounds internally for reliability.
      */
     fun enableFcc(): Boolean {

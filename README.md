@@ -94,9 +94,10 @@ restored when the app starts after controller boot or an APK update.
 **Auto FCC — Home Point** waits for localized Home Point text from the original
 DJI Fly through Android Accessibility. It does not open a DUML socket while
 waiting. After an exact phrase match it connects to the controller if needed and
-sets country `AU` once, verifies it with `07:19`, and sends the
-17-frame × 2-round FCC core profile. It then re-arms instead of
-stopping, so a later Home Point after an aircraft battery replacement triggers
+reads the country with `07:19`; if it is not `AU`, the app writes `07:30=AU`
+and verifies the result, retrying the write/read pair up to three times. It then
+sends the 17-frame × 2-round FCC core profile and re-arms instead of stopping,
+so a later Home Point after an aircraft battery replacement triggers
 another full apply while the controller remains on. Duplicate UI events are
 debounced for 30 seconds. Enable **SkylabFCCfree Home Point Test** once in
 Android Accessibility settings. The first attempt opens the required settings;
@@ -239,8 +240,10 @@ GPS uses the model-independent hash `0xC5429582` for `g_config.gps_cfg.gps_enabl
 ### FCC Profile
 
 The original upstream composite contained 21 frames sent in 2 rounds. Country
-handling is now bounded and verifiable: every FCC apply sends one
-`07:30=AU`, reads the result once with `07:19`, then sends the remaining
+handling is now read-first, bounded, and verifiable: every FCC apply first reads
+the current country with `07:19`. If it is already `AU`, no country write is
+sent. Otherwise the app sends `07:30=AU` and verifies it with another `07:19`,
+retrying the write/read pair up to three times. It then sends the remaining
 17-frame core in 2 rounds with 30ms between frames and 100ms between rounds.
 The original composite produced an FCC result on tested Mini 5 Pro, Mini 4 Pro,
 Mavic 4 Pro, Air 3S, Neo, and Avata 360 hardware, but the necessity and
@@ -343,7 +346,7 @@ Profiles combine historical/upstream captures with commands verified during curr
 app/src/main/
   assets/profiles/
     fcc.json          legacy 17-frame FCC core (country write/readback is code-driven)
-    fcc_keepalive.json original opaque 4-frame sequence used by five-second Auto FCC
+    fcc_keepalive.json reference-only original opaque 4-frame keepalive sequence
     ce_restore.json    1 opaque experimental 06:72 request
     4g.json           experimental 128-frame 0x51 serial sweep
     device_info.json   1 frame, version inquiry
