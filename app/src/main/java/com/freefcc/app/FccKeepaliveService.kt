@@ -64,7 +64,8 @@ internal object HomePointSignalPolicy {
  * Foreground Auto FCC service. Home Point mode keeps waiting for original DJI
  * Fly accessibility text and applies the complete profile after every new
  * flight-session Home Point event. Periodic mode applies the complete profile
- * once and then sends the original four-frame keepalive every five seconds.
+ * once and then repeats the country write plus the original four-frame
+ * keepalive every five seconds.
  * Both modes remain active until the user turns their switch off.
  */
 class FccKeepaliveService : Service() {
@@ -210,6 +211,11 @@ class FccKeepaliveService : Service() {
 
         internal fun deliveredAutoMode(action: String?, encodedMode: String?): AutoFccMode? =
             AutoFccMode.fromWireValue(encodedMode).takeIf { action == ACTION_START }
+
+        /** Log key for a periodic country write; identical ticks are not logged twice. */
+        internal fun periodicCountryState(result: FccCountryRegionResult): String =
+            "${result.writeAckMatched}:${result.readAckMatched}:" +
+                "${result.observedCountry ?: "unknown"}:${result.verified}"
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -391,7 +397,7 @@ class FccKeepaliveService : Service() {
             }
 
             FccViewModel.logServiceEvent(
-                "PERIODIC FCC: starting full profile, then legacy keepalive every 5s"
+                "PERIODIC FCC: starting full profile, then country write and legacy keepalive every 5s"
             )
             val pinnedPort = awaitControllerPort(generation) ?: return@launch
             applyCountryRegionOnce(generation, pinnedPort)?.let { result ->
@@ -415,8 +421,19 @@ class FccKeepaliveService : Service() {
                 finishAutoRun(generation, false, "Legacy FCC keepalive unavailable: ${e.message}")
                 return@launch
             }
+            var lastTickCountryState: String? = null
             while (requestGate.isCurrent(generation)) {
                 delay(PERIODIC_INTERVAL_MS)
+                if (!requestGate.isCurrent(generation)) return@launch
+                applyCountryRegionOnce(generation, pinnedPort)?.let { result ->
+                    // Every tick re-writes the country, but the log only records
+                    // transitions so a running mode does not flood the log tab.
+                    val state = periodicCountryState(result)
+                    if (state != lastTickCountryState) {
+                        lastTickCountryState = state
+                        logCountryRegionResult("PERIODIC FCC tick", result)
+                    }
+                }
                 if (!requestGate.isCurrent(generation)) return@launch
                 val report = applyProfileOnce(
                     profile = keepaliveProfile,

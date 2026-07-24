@@ -2,6 +2,7 @@ package com.freefcc.app
 
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -122,6 +123,44 @@ class FccKeepaliveServicePolicyTest {
                 nowMs = 30_001L,
                 debounceMs = 30_000L
             )
+        )
+    }
+
+    @Test
+    fun repeatedIdenticalCountryTicksShareOneLogState() {
+        val verified = FccCountryRegionResult(
+            writeCompleted = true,
+            writeAckMatched = true,
+            readCompleted = true,
+            readAckMatched = true,
+            observedCountry = "AU"
+        )
+        assertEquals(
+            FccKeepaliveService.periodicCountryState(verified),
+            FccKeepaliveService.periodicCountryState(verified.copy())
+        )
+    }
+
+    @Test
+    fun aChangedCountryReadbackProducesANewLogState() {
+        val verified = FccCountryRegionResult(
+            writeCompleted = true,
+            writeAckMatched = true,
+            readCompleted = true,
+            readAckMatched = true,
+            observedCountry = "AU"
+        )
+        assertNotEquals(
+            FccKeepaliveService.periodicCountryState(verified),
+            FccKeepaliveService.periodicCountryState(verified.copy(observedCountry = "RU"))
+        )
+        assertNotEquals(
+            FccKeepaliveService.periodicCountryState(verified),
+            FccKeepaliveService.periodicCountryState(verified.copy(observedCountry = null))
+        )
+        assertNotEquals(
+            FccKeepaliveService.periodicCountryState(verified),
+            FccKeepaliveService.periodicCountryState(verified.copy(writeAckMatched = false))
         )
     }
 
