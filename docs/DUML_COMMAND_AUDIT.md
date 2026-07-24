@@ -54,15 +54,15 @@ RF-региона, GPS, LED или 4G-состояния.
 | 2 | `06:72` | `00000000000100` | Радио-запрос; точный параметр и значение не декодированы | `UNKNOWN` |
 | 3 | `03:F9` | `8a237103f401` | Hash `0x0371238a`, значение LE `0x01f4` = 500: запись `max_height`; это побочный flight-limit write, а не FCC primitive | `CONFIRMED` |
 | 4 | `00:00` | `000001` | Общий запрос к `dst=0x1f`; точная функция не установлена | `UNKNOWN` |
-| 5 | `00:32` | `3131000000` | ID относится к activation/provisioning family; это не доказанная запись country code | `INFERRED` |
+| 5 | `00:32` | `3131000000` | В WM260 `dst=0x6F` — `dji_sec/sec_service` (`s_to_p_air:3`). Aircraft handler принимает `0x31` и возвращает 59-байтное состояние активации; четыре последующих request bytes в этой ветке не используются. Это query, не FCC-write | `CONFIRMED` для WM260 |
 | 6 | `03:AF` | `032400000000000000` | Публичное имя семейства — `GetAreaCode`; значение этого payload не декодировано | `INFERRED` |
-| 7, 8 | `07:30` | `41550000415500000100` | Две полностью одинаковые записи с `AU`; разделить их на 2.4/5.8 GHz по байтам нельзя | `CONFIRMED` для country/area family, иначе `UNKNOWN` |
+| 7, 8 | `07:30` | `41550000415500000100` | RM510 handler читает только первые два байта `AU`, пишет vendor country slot `6` и `country.bin`; хвост игнорирует. Два кадра полностью одинаковы, поэтому band-specific смысл не подтверждён | `CONFIRMED` для локального handler contract |
 | 9 | `09:27` | `00024800ffff0200000000` | SDR assistant write: address `0xffff0048`, value `2`; публичный DJI-код называет эту операцию `setForceFcc` | `CONFIRMED` |
 | 10 | `09:27` | `00026300ffff0300000000` | SDR assistant write: address `0xffff0063`, value `3`; это register write, но точный эффект value `3` не установлен | `CONFIRMED` для register/value, эффект `UNKNOWN` |
 | 11 | `07:18` | `ff415500` | Запись country/area с `AU`; prefix `ff` и route зависят от реализации | `CONFIRMED` для family |
-| 12 | `07:19` | `c0` | Обычно это query/get country code, но нестандартный непустой payload `c0` не декодирован | `INFERRED` |
+| 12 | `07:19` | `c0` | RM510 handler не читает request payload, а возвращает 2-byte alpha-2 country из vendor slot `6`; `c0` в этой реализации игнорируется | `CONFIRMED` для локального handler contract |
 | 13, 14 | `03:F9` | `d04aeffb01/00` | Запись неизвестного hash `0xfbef4ad0` в `1`, затем `0` | `CONFIRMED` для hash/value, имя `UNKNOWN` |
-| 15 | `00:E5` | `323201` | Старое объяснение как country code не подтверждено | `UNKNOWN` |
+| 15 | `00:E5` | `323201` | В WM260 получатель `dst=0x6F` — `dji_sec/sec_service`; `00:E5` обслуживает DJI Care binding/pairing/status. Точный смысл subtype `32 32 01` не восстановлен, но признаков прямого RF/FCC-действия нет | target/family `CONFIRMED`; subtype `UNKNOWN` |
 | 16 | `03:F9` | `236b820101` | Запись неизвестного hash `0x01826b23` в `1` | `CONFIRMED` для hash/value, имя `UNKNOWN` |
 | 17 | `03:F9` | `8773e68a01` | Запись неизвестного hash `0x8ae67387` в `1` | `CONFIRMED` для hash/value, имя `UNKNOWN` |
 | 18, 19 | `06:8C` | `000300`, `000100` | Два opaque radio request; параметр не декодирован | `UNKNOWN` |

@@ -110,8 +110,13 @@ timestamps, command/link/video/data modes.
 | `08:32` | `PUSH` | `dji_command_live_view_push_to_rc` | `0x1c270` | Live-view state push на RC | `CONFIRMED` по symbol context |
 | `00:32` | `PUSH` | `dji_command_active_push` | `0x1c3b8` | Activation state push | `CONFIRMED` по symbol context |
 | `00:32` | `PUSH` | `dji_command_active_auth_push` | `0x1c514` | Activation authorization push; тот же ID, другой payload path | `CONFIRMED` по symbol context |
+| `00:32` | `HANDLER` | `dji_event_active_config` | table slot `0x364b0` | Multiplexed activation protocol; первый payload byte выбирает subcommand | `CONFIRMED` по registration и data flow |
+| `00:E5` | `HANDLER` | `dji_event_handle_djicare` | table slot `0x37578` | DJI Care whitelist/bind/unbind protocol | `CONFIRMED` по registration и data flow |
 | `06:C4` | `SEND` | `dji_command_deactive_wipe_data` | `0x1c6a8` | Deactivation/data-wipe command | `CONFIRMED` по symbol context |
 | `06:A5` | `QUERY` | `dji_command_set_mcu_active` | `0x1c7d4` | Установка MCU active state/flag | `CONFIRMED` по symbol context |
+| `07:19` | `HANDLER` | `dji_event_get_country_code` | table slot `0x37aa0` | Читает vendor country slot `6`, преобразует в alpha-2 и возвращает 2 байта | `CONFIRMED` по registration и data flow |
+| `07:30` | `HANDLER` | `dji_event_set_coutry_code` | table slot `0x37cc8` | Читает первые 2 payload bytes как alpha-2, пишет vendor slot `6` и `country.bin` | `CONFIRMED` по registration и data flow |
+| `18:35` | `HANDLER` | `lte_get_ci_test` | table slot `0x3ade8` | Subcommand `02` возвращает 3-байтное LTE device state | `CONFIRMED` по registration и data flow |
 | `18:39` | `SEND` | `send_fusion_info_to_lte` | `0x1cb8c` | 27-байтный sparse report с тремя WLM link-ratio в LTE service, destination `0x0e06` | `CONFIRMED` по data flow |
 | `51:10` | `SEND` | `send_lte_info_to_wlm` | `0x1ccb4` | 34-байтный LTE channel-state block в WLM, destination `0x0e07` | `CONFIRMED` по data flow |
 | `0200:0D05` | `EXTENDED/QUERY` | `secure_open_debug_auth` | `0x1e844` | Внутренняя secure debug authorization | `CONFIRMED` по symbol context; wire layout расширенный |
@@ -132,6 +137,87 @@ state byte — в offset `25`; длина всегда 27 байт. Функци
 `dji_send_stream_via_localsocket` и выполняется только для активного LTE
 stream path. Точные имена всех полей без type information пока не
 восстановлены.
+
+### Входные handler tables `dji_link`
+
+`dji_link_event_start` передаёт во flex-route client несколько плотных таблиц.
+Каждый slot занимает 24 байта, поэтому command ID однозначно выводится как
+`(handler_slot - table_base) / 24`. Таблицы `00`, `07` и `18` независимо
+сходятся с именами функций и уже известными wire-командами:
+
+| Команда | Handler | Подтверждённая локальная функция RM510 |
+|---|---|---|
+| `00:01` | `dji_event_common_get_device_version` | Device/version query |
+| `00:0B` | `sys_event_reboot` | Reboot handler |
+| `00:0C` | `dji_get_device_state_00_0c` | Device-state query |
+| `00:0E` | `dji_event_heartbeat` | Heartbeat |
+| `00:32` | `dji_event_active_config` | Activation/configuration protocol |
+| `00:36` | `dji_event_deactive_config` | Deactivation configuration |
+| `00:4A` | `dji_event_set_date` | Set date/time |
+| `00:50` / `00:51` | `dji_set_serial_number` / `dji_get_serial_number` | Set/get serial |
+| `00:5B` | `dji_event_ftpd_control` | FTP daemon control |
+| `00:78` | `dji_get_sdcard_present` | SD-card presence |
+| `00:88` | `dji_link_device_notify_req` | Device notification |
+| `00:E0` / `00:E1` / `00:E2` | `secure_sync_secure_state` / `secure_req_open_debug` / `secure_open_debug_auth` | Secure debug flow |
+| `00:E5` | `dji_event_handle_djicare` | DJI Care whitelist/bind/unbind |
+| `00:EA` | `dji_event_handle_log_export` | Log export |
+| `00:ED` / `00:EE` | `bb_event_cb_log_sync` / `bb_event_cb_log_info` | Blackbox log sync/info |
+| `00:FF` | `dji_event_query_device_info` | Device-info query |
+| `07:0B` / `07:0C` | `dji_event_set_wifi_mac_addr` / `dji_event_get_wifi_mac_addr` | Set/get Wi-Fi MAC |
+| `07:19` / `07:30` | `dji_event_get_country_code` / `dji_event_set_coutry_code` | Get/set country |
+| `07:3C` / `07:3D` | `dji_event_set_bt_mac_addr` / `dji_event_get_bt_mac_addr` | Set/get Bluetooth MAC |
+| `07:5C` | `dji_event_mcu_bat_status_push` | MCU battery status |
+| `07:B5` | `dji_event_get_status` | Device status |
+| `07:E0` | `dji_event_hdvt_status_push` | HDVT status |
+| `18:35` | `lte_get_ci_test` | LTE CI/device-state test |
+| `18:37` | `dji_whoami_get_version` | WhoAmI/version |
+| `18:42` | `dji_event_report_status` | Status report |
+
+У `00:32` локальный handler поддерживает subcommands `00`, `01`, `35`, `37`,
+`39` и `3B`. Первый byte FreeFCC payload `31 31 00 00 00` в этот список не
+входит. У `00:E5` локальный DJI Care handler поддерживает `03`, `10`, `12` и
+`17`; первый byte FreeFCC payload `32 32 01` также не поддерживается.
+
+Это `NEGATIVE` только для локальных RM510 handlers. Удалённый contract
+destination `0x6F` проверен отдельно по прошивке самолёта.
+
+### Удалённый получатель `0x6F`
+
+В канонической адресации DUML byte устройства кодируется как
+`(index << 5) | (module_type & 0x1f)`. Поэтому `0x6F` — это
+`module_type=0x0F`, `index=3`. В системном образе Mavic 3 / WM260
+`/etc/dji.json` назначает `sec_service` именно на `s_to_p_air:3`.
+Соответствующий процесс — `/bin/dji_sec`:
+
+| Артефакт | Build ID | SHA-256 | Что подтверждает |
+|---|---|---|---|
+| WM260 `/bin/dji_sec` | `a03cde3cfd9b9ecd670d49900d54fc97` | `ea9356bec59b55e3be7da2fcc726b5a7f31320696fa044387e8842dca014b019` | Получатель `0x6F`, регистрация security/activation и DJI Care flows |
+| WM260 `/lib/libdji_secure.so` | `7c2ca5291a184845a8c4106aab3e86fb` | `7c99e9fc2110e7173cdbebc880ec8edb0e9a461cdf16d13189c9632562732b40` | Реализация `sec_cmd_act_command_handler`, subcommand `0x31` и DJI Care helpers |
+
+Для `00:32 / 31 31 00 00 00` aircraft handler принимает первый byte `0x31`
+и формирует 59-байтный activation-state response: состояние активации,
+product SN, version/security fields. Оставшиеся четыре request bytes в этой
+ветке не используются. Это запрос состояния, а не запись и не команда
+включения FCC.
+
+`00:E5` на том же получателе обслуживает DJI Care binding/pairing/status
+protocol. В `dji_sec` подтверждены bind/unbind events, RC matching, TEE
+verification и отправка сообщений с `cmd_set=0`, `cmd_id=0xE5`. Точное
+назначение subtype `32 32 01` в имеющемся снимке пока не восстановлено, но
+принадлежность к DJI Care security flow подтверждена; признаков прямого
+управления RF/FCC у команды нет.
+
+Адрес нельзя безусловно переносить на все поколения: в прошивках Air 3S и
+Mavic 4 основной `sec_service` назначен на `ve_air:4`, а в WA341
+`s_to_p_air:3` присутствует с урезанным набором security-команд. Поэтому
+вывод `0x6F = dji_sec/sec_service` считается `CONFIRMED` для исследованного
+WM260 snapshot, а не глобальным правилом DJI.
+
+Локальный `07:19` не читает request payload вообще. `07:30` использует только
+первые два байта как alpha-2 country code; оставшийся хвост не участвует в
+этой реализации. Повторное использование `18:35` в `dji_wlm` для
+upgrade/log operations показывает, что название команды зависит не только от
+пары `cmd_set:cmd_id`, но и от destination/host.
 
 ## `dji_sdrs_agent`
 
